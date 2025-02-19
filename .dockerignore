@@ -1,9 +1,0 @@
-.git
-test.py
-README.md
-.gitignore
-.dockerignore
-tests
-k8s
-Dockerfile
-__pycache__
