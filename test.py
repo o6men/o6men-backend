@@ -1,3 +1,1 @@
-from datetime import datetime, UTC
-
-print(int(datetime.now(UTC).timestamp()))
+print([1, 2, 3]*3)

@@ -1,278 +1,326 @@
-import re
 import shutil
 from datetime import datetime, timedelta, UTC
 from pathlib import Path
 from random import randint, choice
-from re import compile
 from typing import List, Literal, Annotated
 
+import sqlalchemy.exc
 from fastapi import APIRouter, Body, Response, HTTPException, Query, UploadFile, File as File_fastapi
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select, or_, cast, DateTime, func, String
+from sqlalchemy.orm import selectinload
 
 import config
-from config import BANKS
 from src import jwt
-from src.core import UserCore, CurrencyCore, WithdrawCore, FileCore
-from src.models import User
+from src.admin.schemas import CurrencyModel, CreateCurrencyInput, GetCurrenciesResponse, CreateCurrencyResponse, \
+    WithdrawModel, GetWithdrawsResponse, GetWithdrawsInput, GetUsersResponse, UserModel, WithdrawUpdateTagInput, \
+    WithdrawUpdateTagResponse, GetTopUpsInput, TopUpModel, GetTopUpsResponse, GetBanksResponse, BankModel
+from src.core import async_session_maker, UserCore, CurrencyCore, WithdrawCore, FileCore
+from src.models import User, Currency, Withdraw, TopUp, Bank
 
 router = APIRouter(prefix='', tags=['Админ панель'])
+
 
 @router.post('/auth/')
 async def auth(response: Response, token: str = Body(..., embed=True)):
     if token == config.ADMIN_TOKEN:
         admin_access_token = jwt.create_jwt_token({'sub': 'admin'})
-        response.set_cookie(key='admin_access_token', value=admin_access_token, httponly=True, samesite='lax', secure=False)
+        response.set_cookie(key='admin_access_token', value=admin_access_token, httponly=True, samesite='lax',
+                            secure=False)
         return {'access': True}
     else:
         return {'access': False}
 
+
 @router.get('/check_auth/')
 async def check_auth():
-    return {'auth': True}
+    return {"ok": True, "result": "Authenticated"}
 
-class Withdraw(BaseModel):
-    class Searched(BaseModel):
-        field: str
-        offset: int
-        length: int
 
-    id: int
-    datetime: int
-    amount: float
-    amount_in_usd: float
-    currency: str
-    user: str
-    phone: str
-    card: str
-    receiver: str|None
-    bank: str
-    tag: str|None
-    status: Literal['completed', 'waiting', 'reject', 'correction']
-    comment: str|None
-    searched: List[Searched]|None = Field(default=None)
-    document: int|None = Field(default=None)
-
-class WithdrawsResponse(BaseModel):
-    class Meta(BaseModel):
-        page: int
-        limit: int
-        total_withdraws: int
-        total_pages: int
-        total_amount: float
-        page_amount: float
-        banks: dict = BANKS
-
-    withdraws: List[Withdraw]
-    meta: Meta
-
-withdraw_list = []
-count = 268
-last_dt = datetime.now(UTC)
-for i in reversed(range(268)):
-    last_dt = last_dt - timedelta(hours=randint(0, 8), minutes=randint(0, 88),
-                                                  seconds=randint(0, 654))
-    count -= 1
-    amount = randint(1, 10000) / randint(1, 9)
-    withdraw_list.append(Withdraw(**{
-        'id': count,
-        'datetime': int(last_dt.timestamp()),
-        'amount': amount,
-        'amount_in_usd': amount / 96.23,
-        'currency': choice(['rubles', 'tenge']),
-        'user': 'astercael',
-        'phone': f'+7 ({randint(100, 999)}) {randint(100, 999)}-{randint(10, 99)}-{randint(10, 99)}',
-        'card': f'{randint(1000, 9999)} {randint(1000, 9999)} {randint(1000, 9999)} {randint(1000, 9999)}',
-        'receiver': 'Пусто',
-        'bank': choice(['tbank', 'sber', 'alfa']),
-        'tag': choice(['Метка', '']),
-        'status': choice(['completed', 'waiting', 'reject', 'correction']),
-        'comment': choice(['Какой-то комментарий', ''])
-    }))
-
-class WithdrawParams(BaseModel):
-    page: int = Query(default=1, ge=1),
-    limit: int = Query(default=50, ge=1),
-    statuses: List[Literal["completed", "waiting", "reject", "correction"]] | None = Query(default=None),
-    banks: List[str] | None = Query(default=None),
-    sort_by: Literal["datetime", "amount"] = "datetime",
-    order: Literal["asc", "desc"] = "desc"
-    search: str | None = Query(None)
-
-@router.get('/withdraws/')
-async def withdraws(params: Annotated[WithdrawParams, Query()]) -> WithdrawsResponse:
-    page, limit, statuses, banks, sort_by, order, search = params.page, params.limit, params.statuses, params.banks, params.sort_by, params.order, params.search
-
-    filtered_withdraws = []
-    total_withdraws = 0
-    start_slice = -limit+limit*page
-    end_slice = limit*page
-    total_amount = 0
-
-    for i in withdraw_list:
-        add = True
-        if not statuses is None:
-            if i.status not in statuses:
-                add = False
-        if not banks is None:
-            if i.bank not in banks:
-                add = False
-        if search:
-            list_searched = []
-            for key, value in  i.__dict__.items():
-                if key == "bank":
-                    value = BANKS[value]
-                elif key == "datetime":
-                    value = datetime.fromtimestamp(value).strftime("%d.%m.%Y %H:%M:%S")
-                if search.lower() in str(value).lower():
-                    re_res = re.compile(search.lower()).search(str(value).lower())
-                    list_searched.append(Withdraw.Searched(
-                        field=key,
-                        offset=re_res.start(),
-                        length=re_res.end() - re_res.start()
-                    ))
-            if list_searched:
-                i.searched = list_searched
-            else:
-                add = False
-        if add:
-            filtered_withdraws.append(i)
-            total_withdraws += 1
-            total_amount += i.amount_in_usd
-
-    sorted_withdraws = sorted(
-        filtered_withdraws,
-        key=lambda x: x.__dict__[sort_by],
-        reverse=True if order == 'desc' else False
+@router.get('/get_withdraws/')
+async def get_withdraws(params: Annotated[GetWithdrawsInput, Query()]) -> GetWithdrawsResponse:
+    page, limit, statuses, banks, sort_by, order, search, start_date, end_date = (
+        params.page, params.limit, params.statuses, params.banks, params.sort_by, params.order, params.search, params.start_date, params.end_date
     )
 
-    slice_withdraws = sorted_withdraws[start_slice:end_slice]
+    query = select(Withdraw)
 
-    total_pages = (total_withdraws + limit - 1) // limit
-    page_amount = 0
+    if statuses:
+        query = query.filter(Withdraw.status.in_(statuses))
 
-    for i in slice_withdraws:
-        page_amount += i.amount_in_usd
+    if banks:
+        query = query.filter(Withdraw.bank_id.in_(banks))
 
-    response = WithdrawsResponse(
-        withdraws=slice_withdraws,
-        meta=WithdrawsResponse.Meta(
-            page=page,
-            limit=limit,
-            total_withdraws=total_withdraws,
-            total_pages=total_pages,
-            total_amount=total_amount,
-            page_amount=page_amount
+    if search:
+        search = search.lower()
+        query = query.filter(
+            or_(
+                cast(Withdraw.amount_in_usd, String).ilike(f'%{search}%'),
+                cast(Withdraw.amount, String).ilike(f'%{search}%'),
+                cast(Withdraw.datetime, String).ilike(f'%{search}%'),
+                cast(Withdraw.phone, String).ilike(f'%{search}%'),
+                cast(Withdraw.card, String).ilike(f'%{search}%'),
+                cast(Withdraw.comment, String).ilike(f'%{search}%'),
+                cast(Withdraw.tag, String).ilike(f'%{search}%'),
+            )
+        )
+
+    if start_date:
+        query = query.filter(cast(Withdraw.datetime, DateTime(timezone=True)) >= start_date)
+
+    if end_date:
+        query = query.filter(cast(Withdraw.datetime, DateTime(timezone=True)) <= end_date)
+
+    if sort_by in ["datetime", "amount_in_usd", "status"]:
+        if order == "desc":
+            query = query.order_by(getattr(Withdraw, sort_by).desc())
+        else:
+            query = query.order_by(getattr(Withdraw, sort_by))
+
+    query = query.offset((page - 1) * limit).limit(limit)
+
+    async with async_session_maker() as session:
+        total_withdraw_count = await session.scalar(select(func.count()).select_from(Withdraw)) or 0
+        total_amount_in_usd = await session.scalar(select(func.sum(Withdraw.amount_in_usd)).select_from(Withdraw)) or 0
+
+        result = await session.execute(query)
+        withdraw_list = result.scalars().all()
+
+    response_withdraws = []
+
+    page_count = (total_withdraw_count + limit - 1) // limit
+    page_withdraw_count = 0
+    page_amount_in_usd = 0
+
+    for withdraw_row in withdraw_list:
+        page_withdraw_count += 1
+        page_amount_in_usd += withdraw_row.amount_in_usd
+        response_withdraws.append(WithdrawModel(**withdraw_row.__dict__))
+
+    response = GetWithdrawsResponse(
+        ok=True,
+        result=GetWithdrawsResponse.Result(
+            withdraws=response_withdraws,
+            meta=GetWithdrawsResponse.Meta(
+                page=page,
+                page_count=page_count,
+                limit=limit,
+                total_withdraw_count=total_withdraw_count,
+                page_withdraw_count=page_withdraw_count,
+                total_amount_in_usd=total_amount_in_usd,
+                page_amount_in_usd=page_amount_in_usd
+            )
         )
     )
 
     return response
 
-@router.get("/withdraw/document/{withdraw_id}/")
-async def withdraw_document(withdraw_id: str):
-    file_id = withdraw_list[int(withdraw_id)].document
-    file_row = await FileCore.find_one(id=file_id)
-    document = Path(file_row.path)
-    if document.exists():
-        return FileResponse(document)
-    else:
-        raise HTTPException(401, "File not found")
-
-
-@router.post("/withdraw/upload_document/{withdraw_id}/")
-async def withdraw_upload_document(withdraw_id: str, file: UploadFile = File_fastapi(...)):
-    try:
-        path = f"files/{file.filename}"
-        with open(path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        await FileCore.add(path=path)
-        file_row = await FileCore.find_one(path=path, order_type="desc")
-        global withdraw_list
-        withdraw_list[int(withdraw_id)].document = file_row.id
-        return JSONResponse(content={"message": "File uploaded successfully"}, status_code=200)
-    except Exception as e:
-        raise HTTPException(400)
-
+#
+# @router.get("/withdraw/get_document/{withdraw_id}/")
+# async def withdraw_document(withdraw_id: str):
+#     file_id = withdraw_list[int(withdraw_id)].document
+#     file_row = await FileCore.find_one(id=file_id)
+#     document = Path(file_row.path)
+#     if document.exists():
+#         return FileResponse(document)
+#     else:
+#         raise HTTPException(401, "File not found")
+#
+#
+# @router.post("/withdraw/upload_document/{withdraw_id}/")
+# async def withdraw_upload_document(withdraw_id: str, file: UploadFile = File_fastapi(...)):
+#     try:
+#         path = f"files/{file.filename}"
+#         with open(path, "wb") as buffer:
+#             shutil.copyfileobj(file.file, buffer)
+#         await FileCore.add(path=path)
+#         file_row = await FileCore.find_one(path=path, order_type="desc")
+#         global withdraw_list
+#         withdraw_list[int(withdraw_id)].document = file_row.id
+#         return JSONResponse(content={"message": "File uploaded successfully"}, status_code=200)
+#     except Exception as e:
+#         raise HTTPException(400)
+#
 
 @router.patch('/withdraw/update_tag/')
-async def update_tag(id: int = Body(..., embed=True), tag: str = Body(..., embed=True)):
-    found_withdraw = True if (await WithdrawCore.find_one(id=id)) else False
-    if not found_withdraw:
-        print(f'NOT FOUND {id=}, {tag=}')
-        return HTTPException(403)
+async def update_tag(data: WithdrawUpdateTagInput, response: Response) -> WithdrawUpdateTagResponse:
+    try:
+        await WithdrawCore.update({"id": data.id}, tag=data.tag)
+        return WithdrawUpdateTagResponse(
+            ok=True,
+            result="Success"
+        )
+    except:
+        response.status_code = 500
+        return WithdrawUpdateTagResponse(
+            ok=False,
+            error="Some error"
+        )
 
 
-@router.get('/topups/')
-async def topups():
-    topup_list = []
+@router.get('/get_topups/')
+async def get_topups(params: Annotated[GetTopUpsInput, Query()]):
+    page, limit, sort_by, order, search, start_date, end_date = (
+        params.page, params.limit, params.sort_by, params.order, params.search,
+        params.start_date, params.end_date
+    )
 
-    count = 0
-    for i in range(15):
-        count += 1
-        amount = randint(1, 10000) / randint(1, 9)
-        topup_list.append({
-            'id': count,
-            'datetime': datetime.now(UTC) - timedelta(hours=randint(0, 50), minutes=randint(0, 200), seconds=randint(0, 800)),
-            'amount': amount,
-            'amount_in_usd': amount + 1.0003,
-            'user': 'astercael',
-            'tag': 'Пусто',
-            'status': choice(['completed', 'waiting', 'reject']),
-        })
+    query = select(TopUp)
 
-    return topup_list
+    if search:
+        search = search.lower()
+        query = query.filter(
+            or_(
+                cast(TopUp.amount_in_usd, String).ilike(f'%{search}%'),
+                cast(TopUp.amount, String).ilike(f'%{search}%'),
+                cast(TopUp.datetime, String).ilike(f'%{search}%'),
+            )
+        )
+
+    if start_date:
+        query = query.filter(cast(TopUp.datetime, DateTime(timezone=True)) >= start_date)
+
+    if end_date:
+        query = query.filter(cast(TopUp.datetime, DateTime(timezone=True)) <= end_date)
+
+    if sort_by in ["datetime", "amount_in_usd"]:
+        if order == "desc":
+            query = query.order_by(getattr(TopUp, sort_by).desc())
+        else:
+            query = query.order_by(getattr(TopUp, sort_by))
+
+    query = query.offset((page - 1) * limit).limit(limit)
+
+    async with async_session_maker() as session:
+        total_topup_count = await session.scalar(select(func.count()).select_from(TopUp)) or 0
+        total_amount_in_usd = await session.scalar(select(func.sum(TopUp.amount_in_usd)).select_from(TopUp)) or 0
+
+        result = await session.execute(query)
+        topup_list = result.scalars().all()
+
+    response_topups = []
+
+    page_count = (total_topup_count + limit - 1) // limit
+    page_topup_count = 0
+    page_amount_in_usd = 0
+
+    for topup_row in topup_list:
+        page_topup_count += 1
+        page_amount_in_usd += topup_row.amount_in_usd
+        response_topups.append(TopUpModel(**topup_row.__dict__))
+
+    response = GetTopUpsResponse(
+        ok=True,
+        result=GetTopUpsResponse.Result(
+            topups=response_topups,
+            meta=GetTopUpsResponse.Meta(
+                page=page,
+                page_count=page_count,
+                limit=limit,
+                total_topup_count=total_topup_count,
+                page_topup_count=page_topup_count,
+                total_amount_in_usd=total_amount_in_usd,
+                page_amount_in_usd=page_amount_in_usd
+            )
+        )
+    )
+
+    return response
 
 
-@router.get('/users/')
-async def users():
-    user_list = []
-    user_rows = await UserCore.find_all()
+@router.get('/get_users/')
+async def get_users(ids: Annotated[List[int], Query(example=[12, 20])] = None):
+    async with async_session_maker() as session:
+        if not ids:
+            query = select(User).order_by(User.id.asc())
+        else:
+            query = select(User).filter(User.id.in_(ids)).order_by(User.id.asc())
+        result = await session.execute(query)
+        user_rows = result.scalars().all()
 
-    for user in user_rows:
-        user: User
-        user_list.append({
-            'datetime': user.registered_at,
-            'name': user.first_name,
-            'username': user.tg_username,
-            'balance': user.tether_balance
-        })
+    response = GetUsersResponse(
+        ok=True,
+        result=[UserModel(**row.__dict__) for row in user_rows]
+    )
 
-    return user_list
+    return response
 
-@router.get('/currencies/')
-async def currencies():
-    currency_list = []
-    currency_rows = await CurrencyCore.find_all()
 
-    for currency in currency_rows:
-        currency_list.append({
-            'name': currency.name,
-            'code': currency.code,
-            'symbol': currency.symbol,
-            'rate': currency.rate,
-            'percent': currency.percent,
-            'min_amount': currency.min_amount,
-            'commission_step': currency.commission_step
-        })
+@router.get('/get_currencies/')
+async def get_currencies(ids: Annotated[List[int], Query(example=[12, 20])] = None) -> GetCurrenciesResponse:
+    async with async_session_maker() as session:
+        if not ids:
+            query = select(Currency).order_by(Currency.id.asc())
+        else:
+            query = select(Currency).filter(Currency.id.in_(ids)).order_by(Currency.id.asc())
+        result = await session.execute(query)
+        currency_rows = result.scalars().all()
 
-    return currency_list
+    response = GetCurrenciesResponse(
+        ok=True,
+        result=[CurrencyModel(**row.__dict__) for row in currency_rows]
+    )
 
-class CurrencyModel(BaseModel):
-    name: str
-    code: str
-    symbol: str
-    percent: str = Field(pattern=compile(r'[+\d.-]+'))
-    min_amount: str = Field(pattern=compile(r'[+\d.-]+'))
-    commission_step: str = Field(pattern=compile(r'[+\d.-]+'))
+    return response
+
 
 @router.post('/create_currency/')
-async def create_currency(currency: CurrencyModel):
-    await CurrencyCore.add(
-        name=currency.name,
-        code=currency.code,
-        symbol=currency.symbol,
-        percent=float(currency.percent),
-        min_amount=float(currency.min_amount),
-        commission_step=float(currency.commission_step)
+async def create_currency(input_currency: CreateCurrencyInput, response: Response) -> CreateCurrencyResponse:
+    try:
+        await CurrencyCore.add(
+            name=input_currency.name,
+            code=input_currency.code,
+            symbol=input_currency.symbol,
+            percent=input_currency.percent,
+            min_amount=input_currency.min_amount,
+            commission_step=input_currency.commission_step
+        )
+    except sqlalchemy.exc.IntegrityError:
+        response.status_code = 400
+        return CreateCurrencyResponse(
+            ok=False,
+            error="This name or code already exist"
+        )
+
+    async with async_session_maker() as session:
+        query = select(Currency).filter(
+            Currency.name == input_currency.name,
+            Currency.code == input_currency.code,
+            Currency.symbol == input_currency.symbol,
+            Currency.percent == input_currency.percent,
+            Currency.min_amount == input_currency.min_amount,
+            Currency.commission_step == input_currency.commission_step
+        )
+        result = await session.execute(query)
+        currency_row = result.scalars().one_or_none()
+
+    if currency_row:
+        return CreateCurrencyResponse(
+            ok=True,
+            result=CurrencyModel(**currency_row.__dict__)
+        )
+    else:
+        response.status_code = 500
+        return CreateCurrencyResponse(
+            ok=False,
+            error="Unknown error"
+        )
+
+@router.get("/get_banks/")
+async def get_banks(ids: Annotated[List[int], Query(example=[12, 20])] = None):
+    async with async_session_maker() as session:
+        if not ids:
+            query = select(Bank).order_by(Bank.id.asc())
+        else:
+            query = select(Bank).filter(Bank.id.in_(ids)).order_by(Bank.id.asc())
+        result = await session.execute(query)
+        banks_rows = result.scalars().all()
+
+    response = GetBanksResponse(
+        ok=True,
+        result=[BankModel(**row.__dict__) for row in banks_rows]
     )
-    return {'success': True}
+
+    return response
+

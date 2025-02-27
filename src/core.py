@@ -5,7 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.engine import Result
 from sqlalchemy import select, update, delete, asc, desc
 from sqlalchemy.exc import SQLAlchemyError
-from src.models import User, TgAuthToken, Withdraw, TopUp, ActiveApplication, Pattern, PatternField, Currency, File
+from src.models import User, TgAuthToken, Withdraw, TopUp, ActiveApplication, Pattern, PatternField, Currency, File, \
+    Bank
 
 
 class BaseCore:
@@ -112,3 +113,6 @@ class CurrencyCore(BaseCore):
 
 class FileCore(BaseCore):
     model = File
+
+class BankCore(BaseCore):
+    model = Bank
