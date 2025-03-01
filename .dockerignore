@@ -3,6 +3,7 @@ test.py
 README.md
 .gitignore
 .dockerignore
+.env
 tests
 k8s
 Dockerfile

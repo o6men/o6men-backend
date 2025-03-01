@@ -1,16 +1,12 @@
 from datetime import datetime
-from typing import Any, List, Literal, Dict
+from typing import List, Literal
 
-from pydantic import BaseModel, Field, model_validator
-from pydantic.json_schema import DEFAULT_REF_TEMPLATE, GenerateJsonSchema, JsonSchemaMode
-from typing_extensions import Self
+from pydantic import BaseModel, Field
 
-from config import BANKS
-from src.models import User
 from src.schemas import ResponseModel
 
-# withdraws
 
+# withdraws
 class WithdrawModel(BaseModel):
     id: int
     user_id: int
@@ -25,20 +21,25 @@ class WithdrawModel(BaseModel):
     tag: str = Field(description="Can be empty string")
     status: Literal['completed', 'waiting', 'reject', 'correction']
     datetime: datetime
-    document: int|None = None
+    document: int | None = None
 
-class GetWithdrawsInput(BaseModel):
+
+class Withdraws(BaseModel):
     page: int = Field(1, ge=1)
     limit: int = Field(50, ge=1)
     statuses: List[Literal["completed", "waiting", "reject", "correction"]] | None = Field(None)
-    banks: List[str] | None = Field(None)
+    bank_ids: List[int] | None = Field(None)
+    currencies: List[int] | None = Field(None)
     sort_by: Literal["datetime", "amount"] = "datetime"
     order: Literal["asc", "desc"] = "desc"
     search: str | None = Field(None)
-    start_date: datetime|None = Field(None, description="Start date in ISO 8601 format with timezone YYYY-MM-DDThh:mm:ss(\"±hh:mm\" or \"Z\")")
-    end_date: datetime|None = Field(None, description="End date in ISO 8601 format with timezone YYYY-MM-DDThh:mm:ss(\"±hh:mm\" or \"Z\"")
+    start_date: datetime | None = Field(None,
+                                        description="Start date in ISO 8601 format with timezone YYYY-MM-DDThh:mm:ss(\"±hh:mm\" or \"Z\")")
+    end_date: datetime | None = Field(None,
+                                      description="End date in ISO 8601 format with timezone YYYY-MM-DDThh:mm:ss(\"±hh:mm\" or \"Z\"")
 
-class GetWithdrawsResponse(ResponseModel):
+
+class WithdrawsResponse(ResponseModel):
     class Meta(BaseModel):
         page: int
         page_count: int
@@ -50,20 +51,28 @@ class GetWithdrawsResponse(ResponseModel):
 
     class Result(BaseModel):
         withdraws: List[WithdrawModel]
-        meta: "GetWithdrawsResponse.Meta"
+        meta: "WithdrawsResponse.Meta"
 
     result: Result
 
 
-class WithdrawUpdateTagInput(BaseModel):
-    id: int
-    tag: str
+class WithdrawPatch(BaseModel):
+    user_id: int | None = None
+    phone: str | None = None
+    card: str | None = None
+    receiver: str | None = None
+    bank_id: int | None = None
+    currency_id: int | None = None
+    comment: str | None = None
+    tag: str | None = None
+    status: Literal["completed", "waiting", "reject", "correction"] | None = None
 
-class WithdrawUpdateTagResponse(ResponseModel):
-    result: Literal["Success"] = None
+
+class WithdrawResponse(ResponseModel):
+    result: WithdrawModel = None
+
 
 # topups
-
 class TopUpModel(BaseModel):
     id: int
     user_id: int
@@ -72,16 +81,20 @@ class TopUpModel(BaseModel):
     amount: float
     amount_in_usd: float
 
-class GetTopUpsInput(BaseModel):
+
+class TopUps(BaseModel):
     page: int = Field(1, ge=1)
     limit: int = Field(50, ge=1)
     sort_by: Literal["datetime", "amount"] = "datetime"
     order: Literal["asc", "desc"] = "desc"
     search: str | None = Field(None)
-    start_date: datetime|None = Field(None, description="Start date in ISO 8601 format with timezone YYYY-MM-DDThh:mm:ss(\"±hh:mm\" or \"Z\")")
-    end_date: datetime|None = Field(None, description="End date in ISO 8601 format with timezone YYYY-MM-DDThh:mm:ss(\"±hh:mm\" or \"Z\"")
+    start_date: datetime | None = Field(None,
+                                        description="Start date in ISO 8601 format with timezone YYYY-MM-DDThh:mm:ss(\"±hh:mm\" or \"Z\")")
+    end_date: datetime | None = Field(None,
+                                      description="End date in ISO 8601 format with timezone YYYY-MM-DDThh:mm:ss(\"±hh:mm\" or \"Z\"")
 
-class GetTopUpsResponse(ResponseModel):
+
+class TopUpsResponse(ResponseModel):
     class Meta(BaseModel):
         page: int
         page_count: int
@@ -93,9 +106,13 @@ class GetTopUpsResponse(ResponseModel):
 
     class Result(BaseModel):
         topups: List[TopUpModel]
-        meta: "GetTopUpsResponse.Meta"
+        meta: "TopUpsResponse.Meta"
 
     result: Result
+
+
+class TopUpResponse(ResponseModel):
+    result: TopUpModel = None
 
 
 # get_currencies|create_currency
@@ -104,15 +121,17 @@ class CurrencyModel(BaseModel):
     name: str
     code: str
     symbol: str
-    rate: float|None
+    rate: float | None
     percent: float
     min_amount: float
     commission_step: float
 
-class GetCurrenciesResponse(ResponseModel):
+
+class CurrenciesResponse(ResponseModel):
     result: List[CurrencyModel] = None
 
-class CreateCurrencyInput(BaseModel):
+
+class CurrencyPost(BaseModel):
     name: str
     code: str
     symbol: str
@@ -120,33 +139,63 @@ class CreateCurrencyInput(BaseModel):
     min_amount: float
     commission_step: float
 
-class CreateCurrencyResponse(ResponseModel):
+
+class CurrencyPatch(BaseModel):
+    name: str | None = None
+    code: str | None = None
+    symbol: str | None = None
+    rate: float | None = None
+    percent: float | None = None
+    min_amount: float | None = None
+    commission_step: float | None = None
+
+
+class CurrencyResponse(ResponseModel):
     result: CurrencyModel = None
 
-# get_users
 
+# get_users
 class UserModel(BaseModel):
     id: int
     first_name: str
     two_fa: bool
     tg_user_id: int
-    tg_username: str|None
+    tg_username: str | None
     role: str
-    email: str|None
+    email: str | None
     registered_at: datetime
-    photo_url: str|None
+    photo_url: str | None
     tether_balance: float
 
 
-class GetUsersResponse(ResponseModel):
+class UsersResponse(ResponseModel):
     result: List[UserModel] = None
 
-# get_banks
 
+class UserResponse(ResponseModel):
+    result: UserModel = None
+
+
+# get_banks
 class BankModel(BaseModel):
     id: int
     name: str
     code: str
 
-class GetBanksResponse(ResponseModel):
+
+class BanksResponse(ResponseModel):
     result: List[BankModel] = None
+
+
+class BankPost(BaseModel):
+    name: str
+    code: str
+
+
+class BankPatch(BaseModel):
+    name: str | None = None
+    code: str | None = None
+
+
+class BankResponse(BaseModel):
+    result: BankModel = None

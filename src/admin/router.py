@@ -1,23 +1,14 @@
-import shutil
-from datetime import datetime, timedelta, UTC
-from pathlib import Path
-from random import randint, choice
-from typing import List, Literal, Annotated
+from typing import Annotated
 
 import sqlalchemy.exc
-from fastapi import APIRouter, Body, Response, HTTPException, Query, UploadFile, File as File_fastapi
-from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Body, Response, Query, HTTPException
 from sqlalchemy import select, or_, cast, DateTime, func, String
-from sqlalchemy.orm import selectinload
 
 import config
 from src import jwt
-from src.admin.schemas import CurrencyModel, CreateCurrencyInput, GetCurrenciesResponse, CreateCurrencyResponse, \
-    WithdrawModel, GetWithdrawsResponse, GetWithdrawsInput, GetUsersResponse, UserModel, WithdrawUpdateTagInput, \
-    WithdrawUpdateTagResponse, GetTopUpsInput, TopUpModel, GetTopUpsResponse, GetBanksResponse, BankModel
-from src.core import async_session_maker, UserCore, CurrencyCore, WithdrawCore, FileCore
-from src.models import User, Currency, Withdraw, TopUp, Bank
+from src.admin.schemas import *
+from src.core import async_session_maker, CurrencyCore, WithdrawCore, BankCore, TopUpCore, UserCore
+from src.models import Currency, Withdraw, TopUp, Bank, User
 
 router = APIRouter(prefix='', tags=['Админ панель'])
 
@@ -38,10 +29,11 @@ async def check_auth():
     return {"ok": True, "result": "Authenticated"}
 
 
-@router.get('/get_withdraws/')
-async def get_withdraws(params: Annotated[GetWithdrawsInput, Query()]) -> GetWithdrawsResponse:
-    page, limit, statuses, banks, sort_by, order, search, start_date, end_date = (
-        params.page, params.limit, params.statuses, params.banks, params.sort_by, params.order, params.search, params.start_date, params.end_date
+@router.get('/withdraws/')
+async def withdraws(params: Annotated[Withdraws, Query()]) -> WithdrawsResponse:
+    page, limit, statuses, bank_ids, sort_by, order, search, start_date, end_date = (
+        params.page, params.limit, params.statuses, params.bank_ids, params.sort_by, params.order, params.search,
+        params.start_date, params.end_date
     )
 
     query = select(Withdraw)
@@ -49,8 +41,8 @@ async def get_withdraws(params: Annotated[GetWithdrawsInput, Query()]) -> GetWit
     if statuses:
         query = query.filter(Withdraw.status.in_(statuses))
 
-    if banks:
-        query = query.filter(Withdraw.bank_id.in_(banks))
+    if bank_ids:
+        query = query.filter(Withdraw.bank_id.in_(bank_ids))
 
     if search:
         search = search.lower()
@@ -72,7 +64,7 @@ async def get_withdraws(params: Annotated[GetWithdrawsInput, Query()]) -> GetWit
     if end_date:
         query = query.filter(cast(Withdraw.datetime, DateTime(timezone=True)) <= end_date)
 
-    if sort_by in ["datetime", "amount_in_usd", "status"]:
+    if sort_by in ["datetime", "amount_in_usd", "status", "amount"]:
         if order == "desc":
             query = query.order_by(getattr(Withdraw, sort_by).desc())
         else:
@@ -98,11 +90,10 @@ async def get_withdraws(params: Annotated[GetWithdrawsInput, Query()]) -> GetWit
         page_amount_in_usd += withdraw_row.amount_in_usd
         response_withdraws.append(WithdrawModel(**withdraw_row.__dict__))
 
-    response = GetWithdrawsResponse(
-        ok=True,
-        result=GetWithdrawsResponse.Result(
+    response = WithdrawsResponse(
+        result=WithdrawsResponse.Result(
             withdraws=response_withdraws,
-            meta=GetWithdrawsResponse.Meta(
+            meta=WithdrawsResponse.Meta(
                 page=page,
                 page_count=page_count,
                 limit=limit,
@@ -115,6 +106,18 @@ async def get_withdraws(params: Annotated[GetWithdrawsInput, Query()]) -> GetWit
     )
 
     return response
+
+
+@router.get("/withdraw/{withdraw_id}/")
+async def withdraw(withdraw_id: int) -> WithdrawResponse:
+    row = await WithdrawCore.find_one(id=withdraw_id)
+    if row:
+        return WithdrawResponse(
+            result=row.__dict__
+        )
+    else:
+        raise HTTPException(400, {"ok": False, "error": "Not found"})
+
 
 #
 # @router.get("/withdraw/get_document/{withdraw_id}/")
@@ -143,24 +146,27 @@ async def get_withdraws(params: Annotated[GetWithdrawsInput, Query()]) -> GetWit
 #         raise HTTPException(400)
 #
 
-@router.patch('/withdraw/update_tag/')
-async def update_tag(data: WithdrawUpdateTagInput, response: Response) -> WithdrawUpdateTagResponse:
+@router.patch('/withdraw/{withdraw_id}/')
+async def update_tag(withdraw_id: int, data: WithdrawPatch) -> WithdrawResponse:
     try:
-        await WithdrawCore.update({"id": data.id}, tag=data.tag)
-        return WithdrawUpdateTagResponse(
-            ok=True,
-            result="Success"
-        )
+        data_to_update = {}
+        for k, v in data.model_dump(exclude_none=True).items():
+            data_to_update[k] = v
+        if not data_to_update:
+            raise HTTPException(400, {"ok": False, "error": "No parameters are passed"})
+        updated_row = await WithdrawCore.patch(withdraw_id, **data_to_update)
+        if updated_row:
+            return WithdrawResponse(
+                result=updated_row.__dict__
+            )
+        else:
+            raise HTTPException(400, {"ok": False, "error": "Id not found"})
     except:
-        response.status_code = 500
-        return WithdrawUpdateTagResponse(
-            ok=False,
-            error="Some error"
-        )
+        raise HTTPException(500, {"ok": False, "error": "Some error"})
 
 
-@router.get('/get_topups/')
-async def get_topups(params: Annotated[GetTopUpsInput, Query()]):
+@router.get('/topups/')
+async def topups(params: Annotated[TopUps, Query()]):
     page, limit, sort_by, order, search, start_date, end_date = (
         params.page, params.limit, params.sort_by, params.order, params.search,
         params.start_date, params.end_date
@@ -210,11 +216,10 @@ async def get_topups(params: Annotated[GetTopUpsInput, Query()]):
         page_amount_in_usd += topup_row.amount_in_usd
         response_topups.append(TopUpModel(**topup_row.__dict__))
 
-    response = GetTopUpsResponse(
-        ok=True,
-        result=GetTopUpsResponse.Result(
+    response = TopUpsResponse(
+        result=TopUpsResponse.Result(
             topups=response_topups,
-            meta=GetTopUpsResponse.Meta(
+            meta=TopUpsResponse.Meta(
                 page=page,
                 page_count=page_count,
                 limit=limit,
@@ -229,8 +234,19 @@ async def get_topups(params: Annotated[GetTopUpsInput, Query()]):
     return response
 
 
-@router.get('/get_users/')
-async def get_users(ids: Annotated[List[int], Query(example=[12, 20])] = None):
+@router.get("/topup/{topup_id}/")
+async def topup(topup_id: int) -> TopUpResponse:
+    row = await TopUpCore.find_one(id=topup_id)
+    if row:
+        return TopUpResponse(
+            result=row.__dict__
+        )
+    else:
+        raise HTTPException(400, {"ok": False, "error": "Not found"})
+
+
+@router.get('/users/')
+async def users(ids: Annotated[List[int], Query(example=[12, 20])] = None):
     async with async_session_maker() as session:
         if not ids:
             query = select(User).order_by(User.id.asc())
@@ -239,16 +255,26 @@ async def get_users(ids: Annotated[List[int], Query(example=[12, 20])] = None):
         result = await session.execute(query)
         user_rows = result.scalars().all()
 
-    response = GetUsersResponse(
-        ok=True,
+    response = UsersResponse(
         result=[UserModel(**row.__dict__) for row in user_rows]
     )
 
     return response
 
 
-@router.get('/get_currencies/')
-async def get_currencies(ids: Annotated[List[int], Query(example=[12, 20])] = None) -> GetCurrenciesResponse:
+@router.get("/user/{user_id}/")
+async def user(user_id: int) -> UserResponse:
+    row = await UserCore.find_one(id=user_id)
+    if row:
+        return UserResponse(
+            result=row.__dict__
+        )
+    else:
+        raise HTTPException(400, {"ok": False, "error": "Not found"})
+
+
+@router.get('/currencies/')
+async def currencies(ids: Annotated[List[int], Query(example=[12, 20])] = None) -> CurrenciesResponse:
     async with async_session_maker() as session:
         if not ids:
             query = select(Currency).order_by(Currency.id.asc())
@@ -257,18 +283,28 @@ async def get_currencies(ids: Annotated[List[int], Query(example=[12, 20])] = No
         result = await session.execute(query)
         currency_rows = result.scalars().all()
 
-    response = GetCurrenciesResponse(
-        ok=True,
+    response = CurrenciesResponse(
         result=[CurrencyModel(**row.__dict__) for row in currency_rows]
     )
 
     return response
 
 
-@router.post('/create_currency/')
-async def create_currency(input_currency: CreateCurrencyInput, response: Response) -> CreateCurrencyResponse:
+@router.get("/currency/{currency_id}/")
+async def currency(currency_id: int) -> CurrencyResponse:
+    row = await CurrencyCore.find_one(id=currency_id)
+    if row:
+        return CurrencyResponse(
+            result=row.__dict__
+        )
+    else:
+        raise HTTPException(400, {"ok": False, "error": "Not found"})
+
+
+@router.post('/currency/')
+async def post_currency(input_currency: CurrencyPost) -> CurrencyResponse:
     try:
-        await CurrencyCore.add(
+        new_row_id = await CurrencyCore.add(
             name=input_currency.name,
             code=input_currency.code,
             symbol=input_currency.symbol,
@@ -277,38 +313,39 @@ async def create_currency(input_currency: CreateCurrencyInput, response: Respons
             commission_step=input_currency.commission_step
         )
     except sqlalchemy.exc.IntegrityError:
-        response.status_code = 400
-        return CreateCurrencyResponse(
-            ok=False,
-            error="This name or code already exist"
-        )
+        raise HTTPException(400, {"ok": False, "error": "This name or code already exists"})
 
-    async with async_session_maker() as session:
-        query = select(Currency).filter(
-            Currency.name == input_currency.name,
-            Currency.code == input_currency.code,
-            Currency.symbol == input_currency.symbol,
-            Currency.percent == input_currency.percent,
-            Currency.min_amount == input_currency.min_amount,
-            Currency.commission_step == input_currency.commission_step
-        )
-        result = await session.execute(query)
-        currency_row = result.scalars().one_or_none()
+    currency_row = await CurrencyCore.find_one(id=new_row_id)
 
     if currency_row:
-        return CreateCurrencyResponse(
-            ok=True,
+        return CurrencyResponse(
             result=CurrencyModel(**currency_row.__dict__)
         )
     else:
-        response.status_code = 500
-        return CreateCurrencyResponse(
-            ok=False,
-            error="Unknown error"
-        )
+        raise HTTPException(500, {"ok": False, "error": "Some error"})
 
-@router.get("/get_banks/")
-async def get_banks(ids: Annotated[List[int], Query(example=[12, 20])] = None):
+
+@router.patch("/currency/{currency_id}/")
+async def patch_currency(currency_id: int, data: CurrencyPatch) -> CurrencyResponse:
+    try:
+        data_to_update = {}
+        for k, v in data.model_dump(exclude_none=True).items():
+            data_to_update[k] = v
+        if not data_to_update:
+            raise HTTPException(400, {"ok": False, "error": "No parameters are passed"})
+        updated_row = await CurrencyCore.patch(currency_id, **data_to_update)
+        if updated_row:
+            return CurrencyResponse(
+                result=updated_row.__dict__
+            )
+        else:
+            raise HTTPException(400, {"ok": False, "error": "Id not found"})
+    except:
+        raise HTTPException(400, {"ok": False, "error": "Some error"})
+
+
+@router.get("/banks/")
+async def banks(ids: Annotated[List[int], Query(example=[12, 20])] = None):
     async with async_session_maker() as session:
         if not ids:
             query = select(Bank).order_by(Bank.id.asc())
@@ -317,10 +354,58 @@ async def get_banks(ids: Annotated[List[int], Query(example=[12, 20])] = None):
         result = await session.execute(query)
         banks_rows = result.scalars().all()
 
-    response = GetBanksResponse(
-        ok=True,
+    response = BanksResponse(
         result=[BankModel(**row.__dict__) for row in banks_rows]
     )
 
     return response
 
+
+@router.get("/bank/{bank_id}/")
+async def bank(bank_id: int) -> BankResponse:
+    row = await BankCore.find_one(id=bank_id)
+    if row:
+        return BankResponse(
+            result=row.__dict__
+        )
+    else:
+        raise HTTPException(400, {"ok": False, "error": "Not found"})
+
+
+@router.post("/bank/")
+async def post_bank(data: BankPost) -> BankResponse:
+    try:
+        new_row_id = await BankCore.add(
+            name=data.name,
+            code=data.code,
+        )
+    except sqlalchemy.exc.IntegrityError:
+        raise HTTPException(400, {"ok": False, "error": "This name or code already exists"})
+
+    new_row = await BankCore.find_one(id=new_row_id)
+
+    if new_row:
+        return BankResponse(
+            result=BankModel(**new_row.__dict__)
+        )
+    else:
+        raise HTTPException(400, {"ok": False, "error": "Some error"})
+
+
+@router.patch("/bank/{bank_id}/")
+async def patch_bank(bank_id: int, data: BankPatch) -> BankResponse:
+    try:
+        data_to_update = {}
+        for k, v in data.model_dump(exclude_none=True).items():
+            data_to_update[k] = v
+        if not data_to_update:
+            raise HTTPException(400, {"ok": False, "error": "No parameters are passed"})
+        updated_row = await BankCore.patch(bank_id, **data_to_update)
+        if updated_row:
+            return BankResponse(
+                result=updated_row.__dict__
+            )
+        else:
+            raise HTTPException(400, {"ok": False, "error": "Id not found"})
+    except:
+        raise HTTPException(400, {"ok": False, "error": "Some error"})

@@ -48,13 +48,14 @@ class BaseCore:
             return res.scalars().one_or_none()
 
     @classmethod
-    async def add(cls, **values) -> None:
+    async def add(cls, **values) -> int:
         async with async_session_maker() as session:
             async with session.begin():
                 new = cls.model(**values)
                 session.add(new)
                 try:
                     await session.commit()
+                    return new.id
                 except SQLAlchemyError as err:
                     await session.rollback()
                     raise err
@@ -76,6 +77,26 @@ class BaseCore:
                     await session.rollback()
                     raise e
                 return result.rowcount
+
+    @classmethod
+    async def patch(cls, id: int, **values) -> Optional[model]:
+        async with async_session_maker() as session:
+            async with session.begin():
+                query = (
+                    update(cls.model)
+                    .where(cls.model.id == id)
+                    .values(**values)
+                    .execution_options(synchronize_session="fetch")
+                    .returning(cls.model)
+                )
+                try:
+                    result = await session.execute(query)
+                    updated_row = result.scalar_one_or_none()
+                    await session.commit()
+                    return updated_row
+                except SQLAlchemyError as e:
+                    await session.rollback()
+                    raise e
 
     @classmethod
     async def delete(cls, **filter_by) -> int:

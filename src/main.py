@@ -8,6 +8,7 @@ from asyncpg.pgproto.pgproto import timedelta
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from websockets.sync.server import serve
 
 from src import middlewares
 from src.auth.router import router as auth_router
@@ -142,7 +143,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(create_test_data())
     yield
 
-app = FastAPI(lifespan=lifespan, root_path_in_servers=False, root_path="/api")
+app = FastAPI(lifespan=lifespan, servers=[{"url": "https://o6men.site/api/"}], root_path="/api")
 
 app.add_middleware(
     CORSMiddleware,
