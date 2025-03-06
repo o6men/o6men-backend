@@ -77,24 +77,24 @@ class CheckingTopUps:
                             continue
 
                         transfer_amount = float(i['quant']) / 1000000
-                        if transfer_amount != application_row.amount:
+                        if transfer_amount != application_row.usdt_amount:
                             continue
 
                         await ActiveApplicationCore.delete(id=application_id)
 
                         user_row = await UserCore.find_one(id=application_row.user_pk)
-                        pre_value = user_row.tether_balance
+                        pre_value = user_row.usdt_balance
                         await UserCore.update(
                             {'id': user_row.id},
-                            tether_balance=user_row.tether_balance + transfer_amount
+                            usdt_balance=user_row.usdt_balance + transfer_amount
                         )
                         await TopUpCore.add(
                             user_pk=user_row.id,
                             transaction_hash=i['transaction_id'],
                             amount=transfer_amount,
-                            amount_in_usd=get_rate('tether', transfer_amount),
+                            usdt_amount=get_rate('tether', transfer_amount),
                             pre_value=pre_value,
-                            post_value=user_row.tether_balance + transfer_amount
+                            post_value=user_row.usdt_balance + transfer_amount
                         )
 
 async def get_rate(currency: Literal['rub', 'tether'], amount: float = 0) -> float:

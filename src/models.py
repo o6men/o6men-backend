@@ -25,7 +25,7 @@ class User(Base):
     email: Mapped[text|None] = mapped_column(unique=True)
     registered_at: Mapped[created_at]
     photo_url: Mapped[text|None]
-    tether_balance: Mapped[float] = mapped_column(default=0.0)
+    usdt_balance: Mapped[float] = mapped_column(default=0.0)
 
     tgauthtoken: Mapped[List['TgAuthToken']] = relationship()
     withdraw: Mapped[List['Withdraw']] = relationship()
@@ -64,7 +64,7 @@ class Withdraw(Base):
     currency_id: Mapped[int] = mapped_column(ForeignKey("currency.id"))
     comment: Mapped[text]
     amount: Mapped[float]
-    amount_in_usd: Mapped[float]
+    usdt_amount: Mapped[float]
     tag: Mapped[text]
     status: Mapped[text]
     datetime: Mapped[created_at]
@@ -75,8 +75,7 @@ class TopUp(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey('user_table.id'))
     datetime: Mapped[created_at]
     transaction_hash: Mapped[text]
-    amount: Mapped[float]
-    amount_in_usd: Mapped[float]
+    usdt_amount: Mapped[float]
     pre_balance: Mapped[float]
 
 class ActiveApplication(Base):
@@ -84,8 +83,7 @@ class ActiveApplication(Base):
     user_pk: Mapped[int] = mapped_column(ForeignKey('user_table.id'))
     datetime: Mapped[created_at]
     type: Mapped[Literal['topup', 'payout']]
-    amount: Mapped[float]
-    currency: Mapped[Literal['tether']] = mapped_column(default='tether')
+    usdt_amount: Mapped[float]
     expired_at: Mapped[datetime|None] = mapped_column(DateTime(timezone=True))
 
 class Pattern(Base):

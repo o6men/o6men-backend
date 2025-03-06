@@ -17,7 +17,7 @@ class WithdrawModel(BaseModel):
     currency_id: int
     comment: str = Field(description="Can be empty string")
     amount: float
-    amount_in_usd: float
+    usdt_amount: float
     tag: str = Field(description="Can be empty string")
     status: Literal['completed', 'waiting', 'reject', 'correction']
     datetime: datetime
@@ -46,8 +46,8 @@ class WithdrawsResponse(ResponseModel):
         limit: int
         total_withdraw_count: int
         page_withdraw_count: int
-        total_amount_in_usd: float
-        page_amount_in_usd: float
+        usdt_total_amount: float
+        usdt_page_amount: float
 
     class Result(BaseModel):
         withdraws: List[WithdrawModel]
@@ -78,8 +78,7 @@ class TopUpModel(BaseModel):
     user_id: int
     datetime: datetime
     transaction_hash: str
-    amount: float
-    amount_in_usd: float
+    usdt_amount: float
 
 
 class TopUps(BaseModel):
@@ -101,8 +100,8 @@ class TopUpsResponse(ResponseModel):
         limit: int
         total_topup_count: int
         page_topup_count: int
-        total_amount_in_usd: float
-        page_amount_in_usd: float
+        usdt_total_amount: float
+        usdt_page_amount: float
 
     class Result(BaseModel):
         topups: List[TopUpModel]
@@ -165,7 +164,11 @@ class UserModel(BaseModel):
     email: str | None
     registered_at: datetime
     photo_url: str | None
-    tether_balance: float
+    usdt_balance: float
+
+class UserPatch(BaseModel):
+    role: str|None = None
+    usdt_balance: float | None = None
 
 
 class UsersResponse(ResponseModel):

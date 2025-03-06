@@ -48,7 +48,7 @@ async def withdraws(params: Annotated[Withdraws, Query()]) -> WithdrawsResponse:
         search = search.lower()
         query = query.filter(
             or_(
-                cast(Withdraw.amount_in_usd, String).ilike(f'%{search}%'),
+                cast(Withdraw.usdt_amount, String).ilike(f'%{search}%'),
                 cast(Withdraw.amount, String).ilike(f'%{search}%'),
                 cast(Withdraw.datetime, String).ilike(f'%{search}%'),
                 cast(Withdraw.phone, String).ilike(f'%{search}%'),
@@ -64,7 +64,7 @@ async def withdraws(params: Annotated[Withdraws, Query()]) -> WithdrawsResponse:
     if end_date:
         query = query.filter(cast(Withdraw.datetime, DateTime(timezone=True)) <= end_date)
 
-    if sort_by in ["datetime", "amount_in_usd", "status", "amount"]:
+    if sort_by in ["datetime", "usdt_amount", "status", "amount"]:
         if order == "desc":
             query = query.order_by(getattr(Withdraw, sort_by).desc())
         else:
@@ -74,7 +74,7 @@ async def withdraws(params: Annotated[Withdraws, Query()]) -> WithdrawsResponse:
 
     async with async_session_maker() as session:
         total_withdraw_count = await session.scalar(select(func.count()).select_from(Withdraw)) or 0
-        total_amount_in_usd = await session.scalar(select(func.sum(Withdraw.amount_in_usd)).select_from(Withdraw)) or 0
+        usdt_total_amount = await session.scalar(select(func.sum(Withdraw.usdt_amount)).select_from(Withdraw)) or 0
 
         result = await session.execute(query)
         withdraw_list = result.scalars().all()
@@ -83,11 +83,11 @@ async def withdraws(params: Annotated[Withdraws, Query()]) -> WithdrawsResponse:
 
     page_count = (total_withdraw_count + limit - 1) // limit
     page_withdraw_count = 0
-    page_amount_in_usd = 0
+    usdt_page_amount = 0
 
     for withdraw_row in withdraw_list:
         page_withdraw_count += 1
-        page_amount_in_usd += withdraw_row.amount_in_usd
+        usdt_page_amount += withdraw_row.usdt_amount
         response_withdraws.append(WithdrawModel(**withdraw_row.__dict__))
 
     response = WithdrawsResponse(
@@ -99,8 +99,8 @@ async def withdraws(params: Annotated[Withdraws, Query()]) -> WithdrawsResponse:
                 limit=limit,
                 total_withdraw_count=total_withdraw_count,
                 page_withdraw_count=page_withdraw_count,
-                total_amount_in_usd=total_amount_in_usd,
-                page_amount_in_usd=page_amount_in_usd
+                usdt_total_amount=usdt_total_amount,
+                usdt_page_amount=usdt_page_amount
             )
         )
     )
@@ -178,8 +178,7 @@ async def topups(params: Annotated[TopUps, Query()]):
         search = search.lower()
         query = query.filter(
             or_(
-                cast(TopUp.amount_in_usd, String).ilike(f'%{search}%'),
-                cast(TopUp.amount, String).ilike(f'%{search}%'),
+                cast(TopUp.usdt_amount, String).ilike(f'%{search}%'),
                 cast(TopUp.datetime, String).ilike(f'%{search}%'),
             )
         )
@@ -190,7 +189,7 @@ async def topups(params: Annotated[TopUps, Query()]):
     if end_date:
         query = query.filter(cast(TopUp.datetime, DateTime(timezone=True)) <= end_date)
 
-    if sort_by in ["datetime", "amount_in_usd"]:
+    if sort_by in ["datetime", "usdt_amount"]:
         if order == "desc":
             query = query.order_by(getattr(TopUp, sort_by).desc())
         else:
@@ -200,7 +199,7 @@ async def topups(params: Annotated[TopUps, Query()]):
 
     async with async_session_maker() as session:
         total_topup_count = await session.scalar(select(func.count()).select_from(TopUp)) or 0
-        total_amount_in_usd = await session.scalar(select(func.sum(TopUp.amount_in_usd)).select_from(TopUp)) or 0
+        usdt_total_amount = await session.scalar(select(func.sum(TopUp.usdt_amount)).select_from(TopUp)) or 0
 
         result = await session.execute(query)
         topup_list = result.scalars().all()
@@ -209,11 +208,11 @@ async def topups(params: Annotated[TopUps, Query()]):
 
     page_count = (total_topup_count + limit - 1) // limit
     page_topup_count = 0
-    page_amount_in_usd = 0
+    usdt_page_amount = 0
 
     for topup_row in topup_list:
         page_topup_count += 1
-        page_amount_in_usd += topup_row.amount_in_usd
+        usdt_page_amount += topup_row.usdt_amount
         response_topups.append(TopUpModel(**topup_row.__dict__))
 
     response = TopUpsResponse(
@@ -225,8 +224,8 @@ async def topups(params: Annotated[TopUps, Query()]):
                 limit=limit,
                 total_topup_count=total_topup_count,
                 page_topup_count=page_topup_count,
-                total_amount_in_usd=total_amount_in_usd,
-                page_amount_in_usd=page_amount_in_usd
+                usdt_total_amount=usdt_total_amount,
+                usdt_page_amount=usdt_page_amount
             )
         )
     )
@@ -271,6 +270,25 @@ async def user(user_id: int) -> UserResponse:
         )
     else:
         raise HTTPException(400, {"ok": False, "error": "Not found"})
+
+
+@router.patch("/user/{user_id}/")
+async def patch_user(user_id: int, data: UserPatch) -> UserResponse:
+    try:
+        data_to_update = {}
+        for k, v in data.model_dump(exclude_none=True).items():
+            data_to_update[k] = v
+        if not data_to_update:
+            raise HTTPException(400, {"ok": False, "error": "No parameters are passed"})
+        updated_row = await UserCore.patch(user_id, **data_to_update)
+        if updated_row:
+            return UserResponse(
+                result=updated_row.__dict__
+            )
+        else:
+            raise HTTPException(400, {"ok": False, "error": "Id not found"})
+    except:
+        raise HTTPException(400, {"ok": False, "error": "Some error"})
 
 
 @router.get('/currencies/')

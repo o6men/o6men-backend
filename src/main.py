@@ -1,7 +1,9 @@
 import asyncio
+import string
 from contextlib import asynccontextmanager
 from datetime import datetime, UTC
 from locale import currency
+from random import randint, choice
 
 import uvicorn
 from asyncpg.pgproto.pgproto import timedelta
@@ -20,16 +22,17 @@ from src.admin.router import router as admin_router
 from src.telegram.bot import start_polling
 
 async def create_test_data():
-    user_row = await UserCore.find_one()
-    if not user_row:
-        await UserCore.add(
-            first_name="Тестовое имя",
-            tg_user_id=892097042,
-        )
-        user_row = await UserCore.find_one()
+    user_rows = await UserCore.find_all()
+    if len(user_rows) < 8:
+        for i in range(8):
+            await UserCore.add(
+                first_name="Тестовое имя" + str(i),
+                tg_user_id=892097043 + i,
+            )
+        user_rows = await UserCore.find_all()
 
-    currency_row = await CurrencyCore.find_one()
-    if not currency_row:
+    currency_rows = await CurrencyCore.find_all()
+    if not currency_rows:
         await CurrencyCore.add(
             name="Рубль",
             code="ruble",
@@ -39,10 +42,10 @@ async def create_test_data():
             min_amount=4000,
             commission_step=15000
         )
-        currency_row = await CurrencyCore.find_one()
+        currency_rows = await CurrencyCore.find_all()
 
-    bank_row = await BankCore.find_one()
-    if not bank_row:
+    bank_rows = await BankCore.find_all()
+    if not bank_rows:
         await BankCore.add(
             name="Сбер",
             code="sber"
@@ -55,85 +58,46 @@ async def create_test_data():
             name="Альфа",
             code="alfa"
         )
-        bank_row = await BankCore.find_one()
+        bank_rows = await BankCore.find_all()
 
-    withdraw = await WithdrawCore.find_one()
-    if not withdraw:
-        await WithdrawCore.add(
-            user_id=user_row.id,
-            phone="+79981502010",
-            card="8843964328371662",
-            receiver="Тестовый получатель 1",
-            bank_id=bank_row.id,
-            currency_id=currency_row.id,
-            comment="Тестовый комментарий 1",
-            amount=8400,
-            amount_in_usd=88.7949260042,
-            tag="Тестовый тег 1",
-            status="completed",
-            datetime=datetime.now(UTC)-timedelta(days=4, minutes=44, seconds=444),
-            pre_balance=426
-        )
+    withdraws = await WithdrawCore.find_all()
+    if len(withdraws) < 60:
+        last_dt = datetime.now(UTC)
+        for i in range(60):
+            amount = randint(1, 10000) / randint(1, 9)
+            last_dt = last_dt - timedelta(days=randint(1, 2), hours=randint(0, 8), minutes=randint(0, 88), seconds=randint(0, 654))
+            await WithdrawCore.add(
+                user_id=choice(user_rows).id,
+                phone=f'+7 ({randint(100, 999)}) {randint(100, 999)}-{randint(10, 99)}-{randint(10, 99)}',
+                card=f'{randint(1000, 9999)} {randint(1000, 9999)} {randint(1000, 9999)} {randint(1000, 9999)}',
+                receiver=choice(("Тестовый получатель" + str(i), "")),
+                bank_id=choice(bank_rows).id,
+                currency_id=choice(currency_rows).id,
+                comment=choice(("Тестовый комментарий" + str(i), "")),
+                amount=amount,
+                usdt_amount=amount/99.104,
+                tag=choice(("Тестовый тег" + str(i), "")),
+                status=choice(['completed', 'waiting', 'reject', 'correction']),
+                datetime=last_dt,
+                pre_balance=randint(500, 12423)
+            )
+        withdraws = await WithdrawCore.find_all()
 
-        await WithdrawCore.add(
-            user_id=user_row.id,
-            phone="+79981502020",
-            card="2354578144571663",
-            receiver="Тестовый получатель 2",
-            bank_id=bank_row.id,
-            currency_id=currency_row.id,
-            comment="",
-            amount=8800,
-            amount_in_usd=93.02325581395,
-            tag="Тестовый тег 2",
-            status="waiting",
-            datetime=datetime.now(UTC) - timedelta(days=3, minutes=33, seconds=333),
-            pre_balance=337.2050739958
-        )
-
-        await WithdrawCore.add(
-            user_id=user_row.id,
-            phone="+79981502030",
-            card="8834964512405435",
-            receiver="",
-            bank_id=bank_row.id,
-            currency_id=currency_row.id,
-            comment="Тестовый комментарий 3",
-            amount=9760,
-            amount_in_usd=103.1712473573,
-            tag="",
-            status="correction",
-            datetime=datetime.now(UTC) - timedelta(days=2, minutes=22, seconds=222),
-            pre_balance=337.2050739958
-        )
-
-        await WithdrawCore.add(
-            user_id=user_row.id,
-            phone="+79981502040",
-            card="3464591702396546",
-            receiver="Тестовый получатель 4",
-            bank_id=bank_row.id,
-            currency_id=currency_row.id,
-            comment="Тестовый комментарий 4",
-            amount=6660,
-            amount_in_usd=70.4016913319,
-            tag="",
-            status="reject",
-            datetime=datetime.now(UTC) - timedelta(days=1, minutes=11, seconds=111),
-            pre_balance=337.2050739958
-        )
-        withdraw = await WithdrawCore.find_one()
-
-    topup = await TopUpCore.find_one()
-    if not topup:
-        await TopUpCore.add(
-            user_id=user_row.id,
-            transaction_hash="qjgni4u5wjgf098ofj23m405pgofj3k423",
-            amount=426,
-            amount_in_usd=425.617878,
-            pre_balance=0,
-            datetime=datetime.now(UTC) - timedelta(days=5, minutes=55, seconds=555),
-        )
+    topups = await TopUpCore.find_all()
+    if len(topups) < 68:
+        last_dt = datetime.now(UTC)
+        for i in range(68):
+            amount = randint(1, 10000) / randint(1, 9)
+            last_dt = last_dt - timedelta(days=randint(1, 2), hours=randint(0, 8), minutes=randint(0, 88),
+                                          seconds=randint(0, 654))
+            await TopUpCore.add(
+                user_id=choice(user_rows).id,
+                transaction_hash="".join([choice(string.ascii_letters) for _ in range(64)]),
+                amount=amount,
+                usdt_amount=amount/99.104,
+                pre_balance=randint(500, 12423),
+                datetime=last_dt,
+            )
 
 # noinspection PyAsyncCall
 @asynccontextmanager

@@ -19,7 +19,7 @@ class ResponseUser(BaseModel):
     tg_user_id: int
     tg_username: str | None
     email: str | None
-    tether_balance: float
+    usdt_balance: float
 
 
 @router.get('/get_user/')
@@ -45,7 +45,7 @@ async def stats(request: Request):
             'id': count,
             'datetime': i.datetime,
             'amount': i.amount,
-            'amount_in_usd': i.amount_in_usd,
+            'usdt_amount': i.usdt_amount,
             'type': 'payout' if type(i) == Withdraw else 'topup',
             'currency': i.to_currency if type(i) == Withdraw else 'tether',
         })
@@ -57,7 +57,7 @@ async def stats(request: Request):
             'id': count,
             'datetime': datetime.now(UTC) - timedelta(hours=randint(0, 50), minutes=randint(0, 200), seconds=randint(0, 800)),
             'amount': amount,
-            'amount_in_usd': amount * 1.003,
+            'usdt_amount': amount * 1.003,
             'type': choice(['topup', 'payout']),
             'currency': 'tether',
         })
