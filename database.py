@@ -8,7 +8,7 @@ engine = create_async_engine(DB_URL)
 async_session_maker = async_sessionmaker(
     engine,
     class_=AsyncSession,
-    expire_on_commit=False
+    expire_on_commit=False,
 )
 
 class Base(AsyncAttrs, DeclarativeBase):

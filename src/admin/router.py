@@ -1,3 +1,4 @@
+import traceback
 from typing import Annotated
 
 import sqlalchemy.exc
@@ -31,12 +32,23 @@ async def check_auth():
 
 @router.get('/withdraws/')
 async def withdraws(params: Annotated[Withdraws, Query()]) -> WithdrawsResponse:
-    page, limit, statuses, bank_ids, sort_by, order, search, start_date, end_date = (
+    page, limit, statuses, bank_ids, sort_by, order, search, start_date, end_date, min_amount, max_amount, min_usdt_amount, max_usdt_amount = (
         params.page, params.limit, params.statuses, params.bank_ids, params.sort_by, params.order, params.search,
-        params.start_date, params.end_date
+        params.start_date, params.end_date, params.min_amount, params.max_amount, params.min_usdt_amount,
+        params.max_usdt_amount
     )
 
-    query = select(Withdraw)
+    query = (
+        select(
+            Withdraw,
+            User,
+            Bank,
+            Currency
+        )
+        .join(User, User.id == Withdraw.user_id)
+        .join(Bank, Bank.id == Withdraw.bank_id)
+        .join(Currency, Currency.id == Withdraw.currency_id)
+    )
 
     if statuses:
         query = query.filter(Withdraw.status.in_(statuses))
@@ -48,6 +60,7 @@ async def withdraws(params: Annotated[Withdraws, Query()]) -> WithdrawsResponse:
         search = search.lower()
         query = query.filter(
             or_(
+                cast(Withdraw.id, String).ilike(f'%{search}%'),
                 cast(Withdraw.usdt_amount, String).ilike(f'%{search}%'),
                 cast(Withdraw.amount, String).ilike(f'%{search}%'),
                 cast(Withdraw.datetime, String).ilike(f'%{search}%'),
@@ -55,6 +68,11 @@ async def withdraws(params: Annotated[Withdraws, Query()]) -> WithdrawsResponse:
                 cast(Withdraw.card, String).ilike(f'%{search}%'),
                 cast(Withdraw.comment, String).ilike(f'%{search}%'),
                 cast(Withdraw.tag, String).ilike(f'%{search}%'),
+                cast(Withdraw.receiver, String).ilike(f'%{search}%'),
+                User.tg_username.ilike(f'%{search}%'),
+                Bank.name.ilike(f'%{search}%'),
+                Currency.name.ilike(f'%{search}%'),
+                User.first_name.ilike(f'%{search}%'),
             )
         )
 
@@ -64,7 +82,82 @@ async def withdraws(params: Annotated[Withdraws, Query()]) -> WithdrawsResponse:
     if end_date:
         query = query.filter(cast(Withdraw.datetime, DateTime(timezone=True)) <= end_date)
 
-    if sort_by in ["datetime", "usdt_amount", "status", "amount"]:
+    if min_amount:
+        query = query.filter(Withdraw.amount >= min_amount)
+
+    if max_amount:
+        query = query.filter(Withdraw.amount <= max_amount)
+
+    if min_usdt_amount:
+        query = query.filter(Withdraw.usdt_amount >= min_usdt_amount)
+
+    if max_usdt_amount:
+        query = query.filter(Withdraw.usdt_amount <= max_usdt_amount)
+
+    meta_dict = {
+        "page": page,
+        "pages_count": 0,
+        "limit": limit,
+        "completed": {},
+        "waiting": {},
+        "reject": {},
+        "correction": {},
+        "all": {}
+    }
+
+    for status in ("completed", "waiting", "reject", "correction", "all"):
+        meta_dict[status] = {
+            "total_count": 0,
+            "total_filtered_count": 0,
+            "page_count": 0,
+            "total_amount": 0,
+            "total_filtered_amount": 0,
+            "page_amount": 0,
+            "total_usdt_amount": 0,
+            "total_filtered_usdt_amount": 0,
+            "page_usdt_amount": 0,
+        }
+    async with async_session_maker() as session:
+        filtered_subquery = query.subquery()
+        meta_filtered_result = await session.execute(select(
+            func.count().filter(filtered_subquery.c.status == "completed").label("completed_count"),
+            func.count().filter(filtered_subquery.c.status == "waiting").label("waiting_count"),
+            func.count().filter(filtered_subquery.c.status == "reject").label("reject_count"),
+            func.count().filter(filtered_subquery.c.status == "correction").label("correction_count"),
+
+            func.sum(filtered_subquery.c.usdt_amount).filter(filtered_subquery.c.status == "completed").label(
+                "completed_usdt_amount"),
+            func.sum(filtered_subquery.c.usdt_amount).filter(filtered_subquery.c.status == "waiting").label(
+                "waiting_usdt_amount"),
+            func.sum(filtered_subquery.c.usdt_amount).filter(filtered_subquery.c.status == "reject").label(
+                "reject_usdt_amount"),
+            func.sum(filtered_subquery.c.usdt_amount).filter(filtered_subquery.c.status == "correction").label(
+                "correction_usdt_amount"),
+
+            func.sum(filtered_subquery.c.amount).filter(filtered_subquery.c.status == "completed").label(
+                "completed_amount"),
+            func.sum(filtered_subquery.c.amount).filter(filtered_subquery.c.status == "waiting").label(
+                "waiting_amount"),
+            func.sum(filtered_subquery.c.amount).filter(filtered_subquery.c.status == "reject").label("reject_amount"),
+            func.sum(filtered_subquery.c.amount).filter(filtered_subquery.c.status == "correction").label(
+                "correction_amount"),
+
+            func.count().label("all_count"),
+            func.sum(filtered_subquery.c.amount).label("all_filtered_amount"),
+            func.sum(filtered_subquery.c.usdt_amount).label("all_filtered_usdt_amount"),
+        ))
+
+        total_meta_keys = meta_filtered_result.keys()
+        total_meta_values = meta_filtered_result.one()
+        for i, key in enumerate(total_meta_keys):
+            split = key.split("_")
+            type_ = split[0]
+            field = "total_filtered_" + (split[1] if len(split) == 2 else (split[1] + "_" + split[2]))
+            meta_dict[type_][field] = total_meta_values[i] if total_meta_values[i] else 0
+
+    meta_dict["pages_count"] = (meta_dict["all"]["total_filtered_count"] + limit - 1) // limit
+
+    if sort_by in ["datetime", "usdt_amount", "status", "amount", "id"]:
         if order == "desc":
             query = query.order_by(getattr(Withdraw, sort_by).desc())
         else:
@@ -73,35 +166,60 @@ async def withdraws(params: Annotated[Withdraws, Query()]) -> WithdrawsResponse:
     query = query.offset((page - 1) * limit).limit(limit)
 
     async with async_session_maker() as session:
-        total_withdraw_count = await session.scalar(select(func.count()).select_from(Withdraw)) or 0
-        usdt_total_amount = await session.scalar(select(func.sum(Withdraw.usdt_amount)).select_from(Withdraw)) or 0
+        meta_result = await session.execute(
+            select(
+                func.count().filter(Withdraw.status == "completed").label("completed_count"),
+                func.count().filter(Withdraw.status == "waiting").label("waiting_count"),
+                func.count().filter(Withdraw.status == "reject").label("reject_count"),
+                func.count().filter(Withdraw.status == "correction").label("correction_count"),
+
+                func.sum(Withdraw.usdt_amount).filter(Withdraw.status == "completed").label("completed_usdt_amount"),
+                func.sum(Withdraw.usdt_amount).filter(Withdraw.status == "waiting").label("waiting_usdt_amount"),
+                func.sum(Withdraw.usdt_amount).filter(Withdraw.status == "reject").label("reject_usdt_amount"),
+                func.sum(Withdraw.usdt_amount).filter(Withdraw.status == "correction").label("correction_usdt_amount"),
+
+                func.sum(Withdraw.amount).filter(Withdraw.status == "completed").label("completed_amount"),
+                func.sum(Withdraw.amount).filter(Withdraw.status == "waiting").label("waiting_amount"),
+                func.sum(Withdraw.amount).filter(Withdraw.status == "reject").label("reject_amount"),
+                func.sum(Withdraw.amount).filter(Withdraw.status == "correction").label("correction_amount"),
+
+                func.count().label("all_count"),
+                func.sum(Withdraw.amount).label("all_amount"),
+                func.sum(Withdraw.usdt_amount).label("all_usdt_amount"),
+            )
+        )
+        total_meta_keys = meta_result.keys()
+        total_meta_values = meta_result.one()
+        for i, key in enumerate(total_meta_keys):
+            split = key.split("_")
+            type_ = split[0]
+            field = "total_" + (split[1] if len(split) == 2 else (split[1] + "_" + split[2]))
+            meta_dict[type_][field] = total_meta_values[i] if total_meta_values[i] else 0
 
         result = await session.execute(query)
-        withdraw_list = result.scalars().all()
+        withdraw_list = result.all()
 
     response_withdraws = []
 
-    page_count = (total_withdraw_count + limit - 1) // limit
-    page_withdraw_count = 0
-    usdt_page_amount = 0
+    for withdraw_row, user_row, bank_row, currency_row in withdraw_list:
+        meta_dict[withdraw_row.status]["page_count"] += 1
+        meta_dict[withdraw_row.status]["page_amount"] += withdraw_row.amount
+        meta_dict[withdraw_row.status]["page_usdt_amount"] += withdraw_row.usdt_amount
+        meta_dict["all"]["page_count"] += 1
+        meta_dict["all"]["page_amount"] += withdraw_row.amount
+        meta_dict["all"]["page_usdt_amount"] += withdraw_row.usdt_amount
 
-    for withdraw_row in withdraw_list:
-        page_withdraw_count += 1
-        usdt_page_amount += withdraw_row.usdt_amount
-        response_withdraws.append(WithdrawModel(**withdraw_row.__dict__))
+        response_withdraws.append(WithdrawModel(
+            user=UserModel(**user_row.__dict__),
+            bank=BankModel(**bank_row.__dict__),
+            currency=CurrencyModel(**currency_row.__dict__),
+            **withdraw_row.__dict__
+        ))
 
     response = WithdrawsResponse(
         result=WithdrawsResponse.Result(
             withdraws=response_withdraws,
-            meta=WithdrawsResponse.Meta(
-                page=page,
-                page_count=page_count,
-                limit=limit,
-                total_withdraw_count=total_withdraw_count,
-                page_withdraw_count=page_withdraw_count,
-                usdt_total_amount=usdt_total_amount,
-                usdt_page_amount=usdt_page_amount
-            )
+            meta=WithdrawsResponse.Meta(**meta_dict)
         )
     )
 
@@ -112,74 +230,65 @@ async def withdraws(params: Annotated[Withdraws, Query()]) -> WithdrawsResponse:
 async def withdraw(withdraw_id: int) -> WithdrawResponse:
     row = await WithdrawCore.find_one(id=withdraw_id)
     if row:
+        withdraw_row, user_row, bank_row, currency_row = row
         return WithdrawResponse(
-            result=row.__dict__
+            result=WithdrawModel(user=user_row.__dict__, bank=bank_row.__dict__, currency=currency_row.__dict__,
+                                 **withdraw_row.__dict__)
         )
     else:
         raise HTTPException(400, {"ok": False, "error": "Not found"})
 
 
-#
-# @router.get("/withdraw/get_document/{withdraw_id}/")
-# async def withdraw_document(withdraw_id: str):
-#     file_id = withdraw_list[int(withdraw_id)].document
-#     file_row = await FileCore.find_one(id=file_id)
-#     document = Path(file_row.path)
-#     if document.exists():
-#         return FileResponse(document)
-#     else:
-#         raise HTTPException(401, "File not found")
-#
-#
-# @router.post("/withdraw/upload_document/{withdraw_id}/")
-# async def withdraw_upload_document(withdraw_id: str, file: UploadFile = File_fastapi(...)):
-#     try:
-#         path = f"files/{file.filename}"
-#         with open(path, "wb") as buffer:
-#             shutil.copyfileobj(file.file, buffer)
-#         await FileCore.add(path=path)
-#         file_row = await FileCore.find_one(path=path, order_type="desc")
-#         global withdraw_list
-#         withdraw_list[int(withdraw_id)].document = file_row.id
-#         return JSONResponse(content={"message": "File uploaded successfully"}, status_code=200)
-#     except Exception as e:
-#         raise HTTPException(400)
-#
-
 @router.patch('/withdraw/{withdraw_id}/')
-async def update_tag(withdraw_id: int, data: WithdrawPatch) -> WithdrawResponse:
-    try:
-        data_to_update = {}
-        for k, v in data.model_dump(exclude_none=True).items():
-            data_to_update[k] = v
-        if not data_to_update:
-            raise HTTPException(400, {"ok": False, "error": "No parameters are passed"})
-        updated_row = await WithdrawCore.patch(withdraw_id, **data_to_update)
-        if updated_row:
-            return WithdrawResponse(
-                result=updated_row.__dict__
-            )
-        else:
-            raise HTTPException(400, {"ok": False, "error": "Id not found"})
-    except:
-        raise HTTPException(500, {"ok": False, "error": "Some error"})
+async def update(withdraw_id: int, data: WithdrawPatch) -> WithdrawResponse:
+    data_to_update = {}
+    for k, v in data.model_dump(exclude_none=True).items():
+        data_to_update[k] = v
+    if not data_to_update:
+        raise HTTPException(400, {"ok": False, "error": "No parameters are passed"})
+    updated_row = await WithdrawCore.patch(withdraw_id, **data_to_update)
+    if updated_row:
+        withdraw_row, user_row, bank_row, currency_row = updated_row
+        return WithdrawResponse(
+            result=WithdrawModel(user=user_row.__dict__, bank=bank_row.__dict__, currency=currency_row.__dict__,
+                                 **withdraw_row.__dict__)
+        )
+    else:
+        raise HTTPException(400, {"ok": False, "error": "Id not found"})
+
+
+@router.delete('/withdraw/{withdraw_id}/')
+async def delete(withdraw_id: int) -> DeleteResponse:
+    deleted_row = await WithdrawCore.delete(id=withdraw_id)
+    if deleted_row:
+        return DeleteResponse(ok=True, result=f"Withdraw {withdraw_id} deleted successfully")
+    else:
+        raise HTTPException(404, {"ok": False, "error": "Id not found"})
 
 
 @router.get('/topups/')
 async def topups(params: Annotated[TopUps, Query()]):
-    page, limit, sort_by, order, search, start_date, end_date = (
+    page, limit, sort_by, order, search, start_date, end_date, min_usdt_amount, max_usdt_amount = (
         params.page, params.limit, params.sort_by, params.order, params.search,
-        params.start_date, params.end_date
+        params.start_date, params.end_date, params.min_usdt_amount, params.max_usdt_amount
     )
 
-    query = select(TopUp)
+    query = select(
+        TopUp,
+        User
+    ).join(
+        User, User.id == TopUp.user_id
+    )
 
     if search:
         search = search.lower()
         query = query.filter(
             or_(
+                cast(TopUp.id, String).ilike(f'%{search}%'),
                 cast(TopUp.usdt_amount, String).ilike(f'%{search}%'),
                 cast(TopUp.datetime, String).ilike(f'%{search}%'),
+                User.tg_username.ilike(f'%{search}%'),
+                User.first_name.ilike(f'%{search}%'),
             )
         )
 
@@ -189,7 +298,36 @@ async def topups(params: Annotated[TopUps, Query()]):
     if end_date:
         query = query.filter(cast(TopUp.datetime, DateTime(timezone=True)) <= end_date)
 
-    if sort_by in ["datetime", "usdt_amount"]:
+    if min_usdt_amount:
+        query = query.filter(TopUp.usdt_amount >= min_usdt_amount)
+
+    if max_usdt_amount:
+        query = query.filter(TopUp.usdt_amount <= max_usdt_amount)
+
+    meta_dict = {
+        "page": page,
+        "pages_count": 0,
+        "limit": limit,
+        "total_count": 0,
+        "total_filtered__count": 0,
+        "page_count": 0,
+        "total_usdt_amount": 0,
+        "total_filtered_usdt_amount": 0,
+        "page_usdt_amount": 0
+    }
+
+    async with async_session_maker() as session:
+        filtered_subquery = query.subquery()
+
+        meta_dict["total_filtered_count"] = await session.scalar(
+            select(func.count()).select_from(filtered_subquery)
+        ) or 0
+
+        meta_dict["total_filtered_usdt_amount"] = await session.scalar(
+            select(func.sum(filtered_subquery.c.usdt_amount))
+        ) or 0
+
+    if sort_by in ["datetime", "usdt_amount", "id"]:
         if order == "desc":
             query = query.order_by(getattr(TopUp, sort_by).desc())
         else:
@@ -198,35 +336,29 @@ async def topups(params: Annotated[TopUps, Query()]):
     query = query.offset((page - 1) * limit).limit(limit)
 
     async with async_session_maker() as session:
-        total_topup_count = await session.scalar(select(func.count()).select_from(TopUp)) or 0
-        usdt_total_amount = await session.scalar(select(func.sum(TopUp.usdt_amount)).select_from(TopUp)) or 0
+        meta_dict["total_count"] = await session.scalar(select(func.count()).select_from(TopUp)) or 0
+        meta_dict["total_usdt_amount"] = await session.scalar(
+            select(func.sum(TopUp.usdt_amount)).select_from(TopUp)) or 0
 
         result = await session.execute(query)
-        topup_list = result.scalars().all()
+        topup_list = result.all()
 
     response_topups = []
 
-    page_count = (total_topup_count + limit - 1) // limit
-    page_topup_count = 0
-    usdt_page_amount = 0
+    meta_dict["pages_count"] = (meta_dict["total_filtered_count"] + limit - 1) // limit
 
-    for topup_row in topup_list:
-        page_topup_count += 1
-        usdt_page_amount += topup_row.usdt_amount
-        response_topups.append(TopUpModel(**topup_row.__dict__))
+    for topup_row, user_row in topup_list:
+        meta_dict["page_count"] += 1
+        meta_dict["page_usdt_amount"] += topup_row.usdt_amount
+        response_topups.append(TopUpModel(
+            user=UserModel(**user_row.__dict__),
+            **topup_row.__dict__
+        ))
 
     response = TopUpsResponse(
         result=TopUpsResponse.Result(
             topups=response_topups,
-            meta=TopUpsResponse.Meta(
-                page=page,
-                page_count=page_count,
-                limit=limit,
-                total_topup_count=total_topup_count,
-                page_topup_count=page_topup_count,
-                usdt_total_amount=usdt_total_amount,
-                usdt_page_amount=usdt_page_amount
-            )
+            meta=meta_dict
         )
     )
 
@@ -235,17 +367,23 @@ async def topups(params: Annotated[TopUps, Query()]):
 
 @router.get("/topup/{topup_id}/")
 async def topup(topup_id: int) -> TopUpResponse:
-    row = await TopUpCore.find_one(id=topup_id)
-    if row:
+    query = select(TopUp, User).join(User, User.id == TopUp.user_id)
+    async with async_session_maker() as session:
+        result = await session.execute(query)
+        topup_row, user_row = result.first()
+    if topup_row:
         return TopUpResponse(
-            result=row.__dict__
+            result=TopUpModel(
+                user=UserModel(**user_row.__dict__),
+                **topup_row.__dict__
+            )
         )
     else:
         raise HTTPException(400, {"ok": False, "error": "Not found"})
 
 
 @router.get('/users/')
-async def users(ids: Annotated[List[int], Query(example=[12, 20])] = None):
+async def users(ids: Annotated[List[int], Query(example=[1, 2])] = None):
     async with async_session_maker() as session:
         if not ids:
             query = select(User).order_by(User.id.asc())
@@ -274,25 +412,22 @@ async def user(user_id: int) -> UserResponse:
 
 @router.patch("/user/{user_id}/")
 async def patch_user(user_id: int, data: UserPatch) -> UserResponse:
-    try:
-        data_to_update = {}
-        for k, v in data.model_dump(exclude_none=True).items():
-            data_to_update[k] = v
-        if not data_to_update:
-            raise HTTPException(400, {"ok": False, "error": "No parameters are passed"})
-        updated_row = await UserCore.patch(user_id, **data_to_update)
-        if updated_row:
-            return UserResponse(
-                result=updated_row.__dict__
-            )
-        else:
-            raise HTTPException(400, {"ok": False, "error": "Id not found"})
-    except:
-        raise HTTPException(400, {"ok": False, "error": "Some error"})
+    data_to_update = {}
+    for k, v in data.model_dump(exclude_none=True).items():
+        data_to_update[k] = v
+    if not data_to_update:
+        raise HTTPException(400, {"ok": False, "error": "No parameters are passed"})
+    updated_row = await UserCore.patch(user_id, **data_to_update)
+    if updated_row:
+        return UserResponse(
+            result=updated_row.__dict__
+        )
+    else:
+        raise HTTPException(400, {"ok": False, "error": "Id not found"})
 
 
 @router.get('/currencies/')
-async def currencies(ids: Annotated[List[int], Query(example=[12, 20])] = None) -> CurrenciesResponse:
+async def currencies(ids: Annotated[List[int], Query(example=[1, 2])] = None) -> CurrenciesResponse:
     async with async_session_maker() as session:
         if not ids:
             query = select(Currency).order_by(Currency.id.asc())
@@ -345,25 +480,22 @@ async def post_currency(input_currency: CurrencyPost) -> CurrencyResponse:
 
 @router.patch("/currency/{currency_id}/")
 async def patch_currency(currency_id: int, data: CurrencyPatch) -> CurrencyResponse:
-    try:
-        data_to_update = {}
-        for k, v in data.model_dump(exclude_none=True).items():
-            data_to_update[k] = v
-        if not data_to_update:
-            raise HTTPException(400, {"ok": False, "error": "No parameters are passed"})
-        updated_row = await CurrencyCore.patch(currency_id, **data_to_update)
-        if updated_row:
-            return CurrencyResponse(
-                result=updated_row.__dict__
-            )
-        else:
-            raise HTTPException(400, {"ok": False, "error": "Id not found"})
-    except:
-        raise HTTPException(400, {"ok": False, "error": "Some error"})
+    data_to_update = {}
+    for k, v in data.model_dump(exclude_none=True).items():
+        data_to_update[k] = v
+    if not data_to_update:
+        raise HTTPException(400, {"ok": False, "error": "No parameters are passed"})
+    updated_row = await CurrencyCore.patch(currency_id, **data_to_update)
+    if updated_row:
+        return CurrencyResponse(
+            result=updated_row.__dict__
+        )
+    else:
+        raise HTTPException(400, {"ok": False, "error": "Id not found"})
 
 
 @router.get("/banks/")
-async def banks(ids: Annotated[List[int], Query(example=[12, 20])] = None):
+async def banks(ids: Annotated[List[int], Query(example=[1, 2])] = None):
     async with async_session_maker() as session:
         if not ids:
             query = select(Bank).order_by(Bank.id.asc())
@@ -412,18 +544,15 @@ async def post_bank(data: BankPost) -> BankResponse:
 
 @router.patch("/bank/{bank_id}/")
 async def patch_bank(bank_id: int, data: BankPatch) -> BankResponse:
-    try:
-        data_to_update = {}
-        for k, v in data.model_dump(exclude_none=True).items():
-            data_to_update[k] = v
-        if not data_to_update:
-            raise HTTPException(400, {"ok": False, "error": "No parameters are passed"})
-        updated_row = await BankCore.patch(bank_id, **data_to_update)
-        if updated_row:
-            return BankResponse(
-                result=updated_row.__dict__
-            )
-        else:
-            raise HTTPException(400, {"ok": False, "error": "Id not found"})
-    except:
-        raise HTTPException(400, {"ok": False, "error": "Some error"})
+    data_to_update = {}
+    for k, v in data.model_dump(exclude_none=True).items():
+        data_to_update[k] = v
+    if not data_to_update:
+        raise HTTPException(400, {"ok": False, "error": "No parameters are passed"})
+    updated_row = await BankCore.patch(bank_id, **data_to_update)
+    if updated_row:
+        return BankResponse(
+            result=updated_row.__dict__
+        )
+    else:
+        raise HTTPException(400, {"ok": False, "error": "Id not found"})
