@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src.schemas import ResponseModel
 
@@ -118,7 +118,15 @@ class WithdrawModel(BaseModel):
     user: UserModel
     bank: BankModel
     currency: CurrencyModel
-    document: int | None = None
+    document: bool = False
+
+    @field_validator('document', mode='before')
+    def validate_name(cls, v):
+        if isinstance(v, str):
+            return True
+        else:
+            return False
+
 
 
 class Withdraws(BaseModel):
@@ -127,7 +135,7 @@ class Withdraws(BaseModel):
     statuses: List[Literal["completed", "waiting", "reject", "correction"]] | None = None
     bank_ids: List[int] | None = None
     currencies: List[int] | None = None
-    sort_by: Literal["datetime", "amount"] = "datetime"
+    sort_by: Literal["id", "datetime", "amount"] = "datetime"
     order: Literal["asc", "desc"] = "desc"
     search: str | None = None
     start_date: datetime | None = Field(None,
@@ -200,7 +208,7 @@ class TopUpModel(BaseModel):
 class TopUps(BaseModel):
     page: int = Field(1, ge=1)
     limit: int = Field(50, ge=1)
-    sort_by: Literal["datetime", "amount"] = "datetime"
+    sort_by: Literal["id", "datetime", "amount"] = "datetime"
     order: Literal["asc", "desc"] = "desc"
     search: str | None = Field(None)
     start_date: datetime | None = Field(None,

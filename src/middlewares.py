@@ -23,7 +23,6 @@ async def check_auth(request: Request, call_next):
         return await call_next(request)
     elif request['path'] == '/api/admin/auth/':
         if (await request.json()).get('token'):
-            print(1)
             return await call_next(request)
 
     if request['path'][:6] == '/api/admin':

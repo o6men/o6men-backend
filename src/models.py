@@ -13,19 +13,20 @@ from database import Base
 created_at = Annotated[datetime, mapped_column(DateTime(timezone=True), server_default=func.now())]
 text = Annotated[str, mapped_column(Text)]
 
+
 class User(Base):
     __tablename__ = 'user_table'
 
     id = mapped_column(Integer, primary_key=True)
     first_name: Mapped[text]
-    password: Mapped[text|None]
+    password: Mapped[text | None]
     two_fa: Mapped[bool] = mapped_column(default=False)
     tg_user_id = mapped_column(BigInteger, unique=True)
-    tg_username: Mapped[text|None] = mapped_column(unique=True)
+    tg_username: Mapped[text | None] = mapped_column(unique=True)
     role: Mapped[text] = mapped_column(default='user')
-    email: Mapped[text|None] = mapped_column(unique=True)
+    email: Mapped[text | None] = mapped_column(unique=True)
     registered_at: Mapped[created_at]
-    photo_url: Mapped[text|None]
+    photo_url: Mapped[text | None]
     usdt_balance: Mapped[float] = mapped_column(default=0.0)
 
     tgauthtoken: Mapped[List['TgAuthToken']] = relationship()
@@ -37,13 +38,16 @@ class User(Base):
     def __str__(self):
         return f'User: {self.id=}, {self.tg_username=}, {self.role=}'
 
+
 def token_end_at():
     return datetime.now() + timedelta(minutes=config.TOKEN_LIFETIME)
+
 
 class TgAuthToken(Base):
     @staticmethod
     def generate_token():
-        a, b = ''.join([secrets.choice(string.digits) for _ in range(6)]), ''.join([secrets.choice(string.digits + string.ascii_letters) for _ in range(24)])
+        a, b = ''.join([secrets.choice(string.digits) for _ in range(6)]), ''.join(
+            [secrets.choice(string.digits + string.ascii_letters) for _ in range(24)])
         return f'{a}:{b}'
 
     id = mapped_column(Integer, primary_key=True)
@@ -54,6 +58,7 @@ class TgAuthToken(Base):
 
     def __str__(self):
         return f'TgAuthToken: {self.id=}, {self.created_at=}, {self.end_at=}, {self.token=}'
+
 
 class Withdraw(Base):
     id = mapped_column(Integer, primary_key=True)
@@ -70,6 +75,8 @@ class Withdraw(Base):
     status: Mapped[text]
     datetime: Mapped[created_at]
     pre_balance: Mapped[float]
+    document: Mapped[str | None] = None
+
 
 class TopUp(Base):
     id = mapped_column(Integer, primary_key=True)
@@ -79,13 +86,15 @@ class TopUp(Base):
     usdt_amount: Mapped[float]
     pre_balance: Mapped[float]
 
+
 class ActiveApplication(Base):
     id = mapped_column(Integer, primary_key=True)
     user_pk: Mapped[int] = mapped_column(ForeignKey('user_table.id'))
     datetime: Mapped[created_at]
     type: Mapped[Literal['topup', 'payout']]
     usdt_amount: Mapped[float]
-    expired_at: Mapped[datetime|None] = mapped_column(DateTime(timezone=True))
+    expired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
 
 class Pattern(Base):
     id = mapped_column(Integer, primary_key=True)
@@ -94,33 +103,37 @@ class Pattern(Base):
     name: Mapped[text]
     field: Mapped[List['PatternField']] = relationship()
 
+
 class PatternField(Base):
     id = mapped_column(Integer, primary_key=True)
     pattern_pk: Mapped[int] = mapped_column(ForeignKey('pattern.id'))
     name: Mapped[text]
     card: Mapped[text]
     phone: Mapped[text]
-    receiver: Mapped[text|None]
+    receiver: Mapped[text | None]
     bank: Mapped[text]
     amount: Mapped[text]
     currency: Mapped[text]
-    comment: Mapped[text|None]
+    comment: Mapped[text | None]
+
 
 class Currency(Base):
     id = mapped_column(Integer, primary_key=True)
     name: Mapped[text] = mapped_column(unique=True)
     code: Mapped[text] = mapped_column(unique=True)
-    symbol: Mapped[text|None]
-    rate: Mapped[float|None]
+    symbol: Mapped[text | None]
+    rate: Mapped[float | None]
     percent: Mapped[float]
     min_amount: Mapped[float]
     commission_step: Mapped[float]
 
     withdraw: Mapped[List['Withdraw']] = relationship()
 
+
 class File(Base):
     id = mapped_column(Integer, primary_key=True)
     path: Mapped[text]
+
 
 class Bank(Base):
     id = mapped_column(Integer, primary_key=True)

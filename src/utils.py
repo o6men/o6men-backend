@@ -8,6 +8,8 @@ from datetime import datetime, UTC
 import httpx
 
 import config
+from src.core import ActiveApplicationCore, TopUpCore, UserCore
+
 
 class Auth:
     @staticmethod

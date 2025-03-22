@@ -1,14 +1,16 @@
-import traceback
+import os
+import shutil
 from typing import Annotated
 
 import sqlalchemy.exc
-from fastapi import APIRouter, Body, Response, Query, HTTPException
+from fastapi import APIRouter, Body, Response, Query, HTTPException, UploadFile
 from sqlalchemy import select, or_, cast, DateTime, func, String
+from fastapi.responses import FileResponse
 
 import config
 from src import jwt
 from src.admin.schemas import *
-from src.core import async_session_maker, CurrencyCore, WithdrawCore, BankCore, TopUpCore, UserCore
+from src.core import async_session_maker, CurrencyCore, WithdrawCore, BankCore, UserCore
 from src.models import Currency, Withdraw, TopUp, Bank, User
 
 router = APIRouter(prefix='', tags=['Админ панель'])
@@ -240,7 +242,7 @@ async def withdraw(withdraw_id: int) -> WithdrawResponse:
 
 
 @router.patch('/withdraw/{withdraw_id}/')
-async def update(withdraw_id: int, data: WithdrawPatch) -> WithdrawResponse:
+async def withdraw_update(withdraw_id: int, data: WithdrawPatch) -> WithdrawResponse:
     data_to_update = {}
     for k, v in data.model_dump(exclude_none=True).items():
         data_to_update[k] = v
@@ -258,13 +260,48 @@ async def update(withdraw_id: int, data: WithdrawPatch) -> WithdrawResponse:
 
 
 @router.delete('/withdraw/{withdraw_id}/')
-async def delete(withdraw_id: int) -> DeleteResponse:
+async def withdraw_delete(withdraw_id: int) -> DeleteResponse:
     deleted_row = await WithdrawCore.delete(id=withdraw_id)
     if deleted_row:
         return DeleteResponse(ok=True, result=f"Withdraw {withdraw_id} deleted successfully")
     else:
         raise HTTPException(404, {"ok": False, "error": "Id not found"})
 
+
+@router.post('/withdraw/{withdraw_id}/document/')
+async def withdraw_document(withdraw_id: int, file: UploadFile) -> WithdrawResponse:
+    rows = await WithdrawCore.find_one(id=withdraw_id)
+    if not rows:
+        raise HTTPException(404, {"ok": False, "error": "Id not found"})
+    if rows[0].document:
+        os.remove("files/" + rows[0].document)
+    file_extension = file.filename.split(".")[-1]
+    if file_extension not in ("png", "jpg", "jpeg", "pdf"):
+        raise HTTPException(404, {"ok": False, "error": "Unsupported file type"})
+    file_name = f"withdraw_{withdraw_id}.{file_extension}"
+
+    # Сохраняем файл на диск
+    with open("files/" + file_name, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    result = await WithdrawCore.patch(withdraw_id, document=file_name)
+
+    withdraw_row, user_row, bank_row, currency_row = result
+
+    return WithdrawResponse(
+        result=WithdrawModel(user=user_row.__dict__, bank=bank_row.__dict__, currency=currency_row.__dict__,
+                             **withdraw_row.__dict__)
+    )
+
+@router.get('/withdraw/{withdraw_id}/document/')
+async def withdraw_document(withdraw_id: int) -> FileResponse:
+    withdraw_row = await WithdrawCore.find_one(id=withdraw_id)
+    if not withdraw_row:
+        raise HTTPException(404, {"ok": False, "error": "Id not found"})
+    elif not withdraw_row[0].document:
+        raise HTTPException(404, {"ok": False, "error": "Withdraw does not have a document"})
+
+    return FileResponse("files/" + withdraw_row[0].document, filename=withdraw_row[0].document)
 
 @router.get('/topups/')
 async def topups(params: Annotated[TopUps, Query()]):
@@ -367,7 +404,7 @@ async def topups(params: Annotated[TopUps, Query()]):
 
 @router.get("/topup/{topup_id}/")
 async def topup(topup_id: int) -> TopUpResponse:
-    query = select(TopUp, User).join(User, User.id == TopUp.user_id)
+    query = select(TopUp, User).join(User, User.id == TopUp.user_id).filter(TopUp.id == topup_id)
     async with async_session_maker() as session:
         result = await session.execute(query)
         topup_row, user_row = result.first()
@@ -411,7 +448,7 @@ async def user(user_id: int) -> UserResponse:
 
 
 @router.patch("/user/{user_id}/")
-async def patch_user(user_id: int, data: UserPatch) -> UserResponse:
+async def user_patch(user_id: int, data: UserPatch) -> UserResponse:
     data_to_update = {}
     for k, v in data.model_dump(exclude_none=True).items():
         data_to_update[k] = v
@@ -455,7 +492,7 @@ async def currency(currency_id: int) -> CurrencyResponse:
 
 
 @router.post('/currency/')
-async def post_currency(input_currency: CurrencyPost) -> CurrencyResponse:
+async def currency_post(input_currency: CurrencyPost) -> CurrencyResponse:
     try:
         new_row_id = await CurrencyCore.add(
             name=input_currency.name,
@@ -479,7 +516,7 @@ async def post_currency(input_currency: CurrencyPost) -> CurrencyResponse:
 
 
 @router.patch("/currency/{currency_id}/")
-async def patch_currency(currency_id: int, data: CurrencyPatch) -> CurrencyResponse:
+async def currency_post(currency_id: int, data: CurrencyPatch) -> CurrencyResponse:
     data_to_update = {}
     for k, v in data.model_dump(exclude_none=True).items():
         data_to_update[k] = v
@@ -523,7 +560,7 @@ async def bank(bank_id: int) -> BankResponse:
 
 
 @router.post("/bank/")
-async def post_bank(data: BankPost) -> BankResponse:
+async def bank_post(data: BankPost) -> BankResponse:
     try:
         new_row_id = await BankCore.add(
             name=data.name,
@@ -543,7 +580,7 @@ async def post_bank(data: BankPost) -> BankResponse:
 
 
 @router.patch("/bank/{bank_id}/")
-async def patch_bank(bank_id: int, data: BankPatch) -> BankResponse:
+async def bank_patch(bank_id: int, data: BankPatch) -> BankResponse:
     data_to_update = {}
     for k, v in data.model_dump(exclude_none=True).items():
         data_to_update[k] = v
