@@ -38,7 +38,6 @@ async def create_test_data():
             code="ruble",
             symbol="₽",
             rate=94.6,
-            percent=2.46,
             min_amount=4000,
             commission_step=15000
         )
@@ -93,8 +92,7 @@ async def create_test_data():
             await TopUpCore.add(
                 user_id=choice(user_rows).id,
                 transaction_hash="".join([choice(string.ascii_letters) for _ in range(64)]),
-                amount=amount,
-                usdt_amount=amount/99.104,
+                usdt_amount=amount,
                 pre_balance=randint(500, 12423),
                 datetime=last_dt,
             )

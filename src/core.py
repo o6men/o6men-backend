@@ -6,7 +6,7 @@ from sqlalchemy.engine import Result
 from sqlalchemy import select, update, delete, asc, desc
 from sqlalchemy.exc import SQLAlchemyError
 from src.models import User, TgAuthToken, Withdraw, TopUp, ActiveApplication, Pattern, PatternField, Currency, File, \
-    Bank
+    Bank, CommissionStep
 
 
 class BaseCore:
@@ -170,6 +170,9 @@ class PatternFieldCore(BaseCore):
 
 class CurrencyCore(BaseCore):
     model = Currency
+
+class CommissionCore(BaseCore):
+    model = CommissionStep
 
 class FileCore(BaseCore):
     model = File

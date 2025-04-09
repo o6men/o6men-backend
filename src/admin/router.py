@@ -1,17 +1,15 @@
 import os
 import shutil
-from typing import Annotated
 
 import sqlalchemy.exc
 from fastapi import APIRouter, Body, Response, Query, HTTPException, UploadFile
-from sqlalchemy import select, or_, cast, DateTime, func, String
+from sqlalchemy import or_, cast, String
 from fastapi.responses import FileResponse
 
-import config
 from src import jwt
 from src.admin.schemas import *
-from src.core import async_session_maker, CurrencyCore, WithdrawCore, BankCore, UserCore
-from src.models import Currency, Withdraw, TopUp, Bank, User
+from src.core import *
+from src.models import *
 
 router = APIRouter(prefix='', tags=['Админ панель'])
 
@@ -303,6 +301,19 @@ async def withdraw_document(withdraw_id: int) -> FileResponse:
 
     return FileResponse("files/" + withdraw_row[0].document, filename=withdraw_row[0].document)
 
+@router.delete('/withdraw/{withdraw_id}/document/')
+async def withdraw_document(withdraw_id: int) -> ResponseModel:
+    withdraw_row = await WithdrawCore.find_one(id=withdraw_id)
+    if not withdraw_row:
+        raise HTTPException(404, {"ok": False, "error": "Id not found"})
+    elif not withdraw_row[0].document:
+        raise HTTPException(404, {"ok": False, "error": "Withdraw does not have a document"})
+
+    await WithdrawCore.patch(id=withdraw_id, document=None)
+    os.remove("files/" + withdraw_row[0].document)
+
+    return ResponseModel(result="Success")
+
 @router.get('/topups/')
 async def topups(params: Annotated[TopUps, Query()]):
     page, limit, sort_by, order, search, start_date, end_date, min_usdt_amount, max_usdt_amount = (
@@ -481,7 +492,7 @@ async def currencies(ids: Annotated[List[int], Query(example=[1, 2])] = None) ->
 
 
 @router.get("/currency/{currency_id}/")
-async def currency(currency_id: int) -> CurrencyResponse:
+async def currency_get(currency_id: int) -> CurrencyResponse:
     row = await CurrencyCore.find_one(id=currency_id)
     if row:
         return CurrencyResponse(
@@ -529,6 +540,57 @@ async def currency_post(currency_id: int, data: CurrencyPatch) -> CurrencyRespon
         )
     else:
         raise HTTPException(400, {"ok": False, "error": "Id not found"})
+
+
+@router.get("/currency/{currency_id}/commission_steps/")
+async def commissions_get(currency_id: int) -> CommissionStepsResponse:
+    currency = await CurrencyCore.find_one(id=currency_id)
+    if not currency:
+        raise HTTPException(404, {"ok": False, "error": "Currency not found"})
+    steps = await CommissionCore.find_all(currency_id=currency_id)
+    return CommissionStepsResponse(result=[CommissionStepModel(**i.__dict__) for i in steps])
+
+
+@router.get("/commission_step/{commission_id}/")
+async def commissions_get(commission_id: int) -> CommissionStepResponse:
+    commission_step = await CommissionCore.find_one(id=commission_id)
+    if not commission_step:
+        raise HTTPException(404, {"ok": False, "error": "Commission not found"})
+    step = await CommissionCore.find_one(id=commission_id)
+    return CommissionStepResponse(result=CommissionStepModel(**step.__dict__))
+
+
+@router.post("/currency/{currency_id}/commission_step/")
+async def commission_post(currency_id: int, input_c_step: CommissionStepPost) -> CommissionStepModel:
+    new_row_id = await CommissionCore.add(**input_c_step.__dict__, currency_id=currency_id, currency_type="currency")
+
+    commission_row = await CommissionCore.find_one(id=new_row_id)
+
+    if commission_row:
+        return CommissionStepModel(**commission_row.__dict__)
+    else:
+        raise HTTPException(500, {"ok": False, "error": "Some error"})
+
+
+@router.patch("/commission_step/{commission_id}/")
+async def commissions_get(commission_id: int, data: CommissionStepPatch) -> CommissionStepResponse:
+    commission_step = await CommissionCore.find_one(id=commission_id)
+    if not commission_step:
+        raise HTTPException(404, {"ok": False, "error": "Commission not found"})
+    data_to_update = {}
+    for k, v in data.model_dump(exclude_none=True).items():
+        data_to_update[k] = v
+    step = await CommissionCore.patch(id=commission_id, **data_to_update)
+    return CommissionStepResponse(result=CommissionStepModel(**step.__dict__))
+
+
+@router.delete("commission_step/{commission_id}/")
+async def commissions_get(commission_id: int) -> DeleteResponse:
+    deleted_row = await CommissionCore.delete(id=commission_id)
+    if deleted_row:
+        return DeleteResponse(ok=True, result=f"Commission step {deleted_row} deleted successfully")
+    else:
+        raise HTTPException(404, {"ok": False, "error": "Id not found"})
 
 
 @router.get("/banks/")

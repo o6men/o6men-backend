@@ -9,16 +9,16 @@ from src.schemas import ResponseModel
 class DeleteResponse(ResponseModel):
     result: str
 
+
 # get_currencies|create_currency
 class CurrencyModel(BaseModel):
     id: int
     name: str
     code: str
-    symbol: str
-    rate: float | None
-    percent: float
+    symbol: str | None
+    rate: float
+    rate_source: str | None
     min_amount: float
-    commission_step: float
 
 
 class CurrenciesResponse(ResponseModel):
@@ -29,9 +29,7 @@ class CurrencyPost(BaseModel):
     name: str
     code: str
     symbol: str
-    percent: float
     min_amount: float
-    commission_step: float
 
 
 class CurrencyPatch(BaseModel):
@@ -39,13 +37,40 @@ class CurrencyPatch(BaseModel):
     code: str | None = None
     symbol: str | None = None
     rate: float | None = None
-    percent: float | None = None
+    rate_source: float | None = None
     min_amount: float | None = None
-    commission_step: float | None = None
 
 
 class CurrencyResponse(ResponseModel):
     result: CurrencyModel = None
+
+
+class CommissionStepModel(BaseModel):
+    id: int
+    currency_id: int
+    min: float
+    max: float
+    commission: float
+
+
+class CommissionStepPost(BaseModel):
+    min: float
+    max: float
+    commission: float
+
+
+class CommissionStepPatch(BaseModel):
+    min: float | None = None
+    max: float | None = None
+    commission: float | None = None
+
+
+class CommissionStepResponse(ResponseModel):
+    result: CommissionStepModel
+
+
+class CommissionStepsResponse(ResponseModel):
+    result: List[CommissionStepModel]
 
 
 # get_users
@@ -126,7 +151,6 @@ class WithdrawModel(BaseModel):
             return True
         else:
             return False
-
 
 
 class Withdraws(BaseModel):

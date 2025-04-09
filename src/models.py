@@ -122,12 +122,29 @@ class Currency(Base):
     name: Mapped[text] = mapped_column(unique=True)
     code: Mapped[text] = mapped_column(unique=True)
     symbol: Mapped[text | None]
-    rate: Mapped[float | None]
-    percent: Mapped[float]
-    min_amount: Mapped[float]
-    commission_step: Mapped[float]
+    rate: Mapped[float]
+    rate_source: Mapped[text | None] = None
+    min_amount: Mapped[float] = mapped_column(default=0.0)
 
     withdraw: Mapped[List['Withdraw']] = relationship()
+
+
+class IndividualCurrency(Base):
+    id = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = ForeignKey("user.id")
+    currency_id: Mapped[int] = ForeignKey("currency.id")
+    rate: Mapped[float]
+    rate_source: Mapped[text | None] = None
+    min_amount: Mapped[float] = 0
+
+
+class CommissionStep(Base):
+    id = mapped_column(Integer, primary_key=True)
+    currency_type: Mapped[Literal["currency", "individual_currency"]]
+    currency_id: Mapped[int]
+    min: Mapped[float]
+    max: Mapped[float]
+    commission: Mapped[float]
 
 
 class File(Base):
