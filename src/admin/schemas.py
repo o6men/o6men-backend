@@ -30,6 +30,7 @@ class CurrencyPost(BaseModel):
     code: str
     symbol: str
     min_amount: float
+    rate: float
 
 
 class CurrencyPatch(BaseModel):
@@ -105,6 +106,14 @@ class BankModel(BaseModel):
     id: int
     name: str
     code: str
+    icon: bool = False
+
+    @field_validator('icon', mode='before')
+    def validate_name(cls, v):
+        if isinstance(v, str):
+            return True
+        else:
+            return False
 
 
 class BanksResponse(ResponseModel):

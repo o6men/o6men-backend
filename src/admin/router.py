@@ -1,9 +1,11 @@
 import os
 import shutil
+import traceback
 
 import sqlalchemy.exc
+from PIL import Image
 from fastapi import APIRouter, Body, Response, Query, HTTPException, UploadFile
-from sqlalchemy import or_, cast, String
+from sqlalchemy import or_, cast, String, func
 from fastapi.responses import FileResponse
 
 from src import jwt
@@ -61,9 +63,9 @@ async def withdraws(params: Annotated[Withdraws, Query()]) -> WithdrawsResponse:
         query = query.filter(
             or_(
                 cast(Withdraw.id, String).ilike(f'%{search}%'),
-                cast(Withdraw.usdt_amount, String).ilike(f'%{search}%'),
-                cast(Withdraw.amount, String).ilike(f'%{search}%'),
-                cast(Withdraw.datetime, String).ilike(f'%{search}%'),
+                cast(func.round(Withdraw.usdt_amount, 2), String).ilike(f'%{search}%'),
+                cast(func.round(Withdraw.amount, 2), String).ilike(f'%{search}%'),
+                func.to_char(Withdraw.datetime, 'YYYY-MM-DD HH24:MI:SS').ilike(f'%{search}%'),
                 cast(Withdraw.phone, String).ilike(f'%{search}%'),
                 cast(Withdraw.card, String).ilike(f'%{search}%'),
                 cast(Withdraw.comment, String).ilike(f'%{search}%'),
@@ -267,7 +269,7 @@ async def withdraw_delete(withdraw_id: int) -> DeleteResponse:
 
 
 @router.post('/withdraw/{withdraw_id}/document/')
-async def withdraw_document(withdraw_id: int, file: UploadFile) -> WithdrawResponse:
+async def withdraw_post_document(withdraw_id: int, file: UploadFile) -> WithdrawResponse:
     rows = await WithdrawCore.find_one(id=withdraw_id)
     if not rows:
         raise HTTPException(404, {"ok": False, "error": "Id not found"})
@@ -291,18 +293,23 @@ async def withdraw_document(withdraw_id: int, file: UploadFile) -> WithdrawRespo
                              **withdraw_row.__dict__)
     )
 
+
 @router.get('/withdraw/{withdraw_id}/document/')
-async def withdraw_document(withdraw_id: int) -> FileResponse:
+async def withdraw_get_document(withdraw_id: int) -> FileResponse:
     withdraw_row = await WithdrawCore.find_one(id=withdraw_id)
     if not withdraw_row:
         raise HTTPException(404, {"ok": False, "error": "Id not found"})
     elif not withdraw_row[0].document:
         raise HTTPException(404, {"ok": False, "error": "Withdraw does not have a document"})
+    elif not os.path.exists("files/" + withdraw_row[0].document):
+        await WithdrawCore.patch(id=withdraw_id, document=None)
+        raise HTTPException(404, {"ok": False, "error": "Withdraw does not have a document"})
 
     return FileResponse("files/" + withdraw_row[0].document, filename=withdraw_row[0].document)
 
+
 @router.delete('/withdraw/{withdraw_id}/document/')
-async def withdraw_document(withdraw_id: int) -> ResponseModel:
+async def withdraw_delete_document(withdraw_id: int) -> ResponseModel:
     withdraw_row = await WithdrawCore.find_one(id=withdraw_id)
     if not withdraw_row:
         raise HTTPException(404, {"ok": False, "error": "Id not found"})
@@ -310,9 +317,11 @@ async def withdraw_document(withdraw_id: int) -> ResponseModel:
         raise HTTPException(404, {"ok": False, "error": "Withdraw does not have a document"})
 
     await WithdrawCore.patch(id=withdraw_id, document=None)
-    os.remove("files/" + withdraw_row[0].document)
+    if os.path.exists("files/" + withdraw_row[0].document):
+        os.remove("files/" + withdraw_row[0].document)
 
     return ResponseModel(result="Success")
+
 
 @router.get('/topups/')
 async def topups(params: Annotated[TopUps, Query()]):
@@ -333,8 +342,8 @@ async def topups(params: Annotated[TopUps, Query()]):
         query = query.filter(
             or_(
                 cast(TopUp.id, String).ilike(f'%{search}%'),
-                cast(TopUp.usdt_amount, String).ilike(f'%{search}%'),
-                cast(TopUp.datetime, String).ilike(f'%{search}%'),
+                cast(func.round(TopUp.usdt_amount, 2), String).ilike(f'%{search}%'),
+                func.to_char(TopUp.datetime, 'YYYY-MM-DD HH24:MI:SS').ilike(f'%{search}%'),
                 User.tg_username.ilike(f'%{search}%'),
                 User.first_name.ilike(f'%{search}%'),
             )
@@ -509,9 +518,8 @@ async def currency_post(input_currency: CurrencyPost) -> CurrencyResponse:
             name=input_currency.name,
             code=input_currency.code,
             symbol=input_currency.symbol,
-            percent=input_currency.percent,
             min_amount=input_currency.min_amount,
-            commission_step=input_currency.commission_step
+            rate=input_currency.rate,
         )
     except sqlalchemy.exc.IntegrityError:
         raise HTTPException(400, {"ok": False, "error": "This name or code already exists"})
@@ -542,6 +550,15 @@ async def currency_post(currency_id: int, data: CurrencyPatch) -> CurrencyRespon
         raise HTTPException(400, {"ok": False, "error": "Id not found"})
 
 
+@router.delete("/currency/{currency_id}/")
+async def currency_delete(currency_id: int) -> DeleteResponse:
+    deleted_row = await CurrencyCore.delete(id=currency_id)
+    if deleted_row:
+        return DeleteResponse(ok=True, result=f"Currency {deleted_row} deleted successfully")
+    else:
+        raise HTTPException(404, {"ok": False, "error": "Id not found"})
+
+
 @router.get("/currency/{currency_id}/commission_steps/")
 async def commissions_get(currency_id: int) -> CommissionStepsResponse:
     currency = await CurrencyCore.find_one(id=currency_id)
@@ -552,7 +569,7 @@ async def commissions_get(currency_id: int) -> CommissionStepsResponse:
 
 
 @router.get("/commission_step/{commission_id}/")
-async def commissions_get(commission_id: int) -> CommissionStepResponse:
+async def commission_get(commission_id: int) -> CommissionStepResponse:
     commission_step = await CommissionCore.find_one(id=commission_id)
     if not commission_step:
         raise HTTPException(404, {"ok": False, "error": "Commission not found"})
@@ -573,7 +590,7 @@ async def commission_post(currency_id: int, input_c_step: CommissionStepPost) ->
 
 
 @router.patch("/commission_step/{commission_id}/")
-async def commissions_get(commission_id: int, data: CommissionStepPatch) -> CommissionStepResponse:
+async def commissions_patch(commission_id: int, data: CommissionStepPatch) -> CommissionStepResponse:
     commission_step = await CommissionCore.find_one(id=commission_id)
     if not commission_step:
         raise HTTPException(404, {"ok": False, "error": "Commission not found"})
@@ -585,7 +602,7 @@ async def commissions_get(commission_id: int, data: CommissionStepPatch) -> Comm
 
 
 @router.delete("commission_step/{commission_id}/")
-async def commissions_get(commission_id: int) -> DeleteResponse:
+async def commissions_delete(commission_id: int) -> DeleteResponse:
     deleted_row = await CommissionCore.delete(id=commission_id)
     if deleted_row:
         return DeleteResponse(ok=True, result=f"Commission step {deleted_row} deleted successfully")
@@ -655,3 +672,77 @@ async def bank_patch(bank_id: int, data: BankPatch) -> BankResponse:
         )
     else:
         raise HTTPException(400, {"ok": False, "error": "Id not found"})
+
+
+@router.post('/bank/{bank_id}/icon/')
+async def bank_post_icon(bank_id: int, file: UploadFile) -> BankResponse:
+    rows = await BankCore.find_one(id=bank_id)
+    if not rows:
+        raise HTTPException(404, {"ok": False, "error": "Id not found"})
+    if rows.icon:
+        os.remove("files/" + rows.icon)
+    file_extension = file.filename.split(".")[-1]
+    if file_extension not in ("png", "jpg", "jpeg"):
+        raise HTTPException(404, {"ok": False, "error": "Unsupported file type"})
+    file_name = f"bank_{bank_id}.{file_extension}"
+    original_path = "files/" + file_name
+    with open(original_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    resized_paths = {}
+    for size in [32, 64, 128, 256]:
+        img = Image.open(original_path)
+        img = img.convert("RGBA")  # Для прозрачности, если нужно
+        img = img.resize((size, size), Image.Resampling.LANCZOS)
+
+        resized_name = f"bank_{bank_id}_{size}x{size}.png"
+        resized_path = f"files/{resized_name}"
+        img.save(resized_path, format="PNG")
+        resized_paths[f"{size}x{size}"] = resized_name
+
+    bank_row = await BankCore.patch(bank_id, icon=resized_paths["64x64"])
+
+    return BankResponse(
+        result=BankModel(**bank_row.__dict__)
+    )
+
+
+@router.delete("/bank/{bank_id}/")
+async def bank_delete(bank_id: int) -> DeleteResponse:
+    deleted_row = await BankCore.delete(id=bank_id)
+    if deleted_row:
+        return DeleteResponse(ok=True, result=f"Bank {deleted_row} deleted successfully")
+    else:
+        raise HTTPException(404, {"ok": False, "error": "Id not found"})
+
+
+@router.get('/bank/{bank_id}/icon/')
+async def bank_get_icon(bank_id: int) -> FileResponse:
+    bank_row: Bank = await BankCore.find_one(id=bank_id)
+    if not bank_row:
+        raise HTTPException(404, {"ok": False, "error": "Id not found"})
+    elif not bank_row.icon:
+        raise HTTPException(404, {"ok": False, "error": "Bank does not have a icon"})
+    elif not os.path.exists("files/" + bank_row.icon):
+        await BankCore.patch(id=bank_id, icon=None)
+        raise HTTPException(404, {"ok": False, "error": "Bank does not have a icon"})
+
+    if not bank_row.icon:
+        raise HTTPException(404, {"ok": False, "error": "Bank does not have a icon"})
+
+    return FileResponse("files/" + bank_row.icon, filename=bank_row.icon)
+
+
+@router.delete('/bank/{bank_id}/icon/')
+async def bank_delete_icon(bank_id: int) -> ResponseModel:
+    bank_row: Bank = await BankCore.find_one(id=bank_id)
+    if not bank_row:
+        raise HTTPException(404, {"ok": False, "error": "Id not found"})
+    elif not bank_row.icon:
+        raise HTTPException(404, {"ok": False, "error": "Bank does not have a icon"})
+
+    await BankCore.patch(id=bank_id, icon=None)
+    if os.path.exists("files/" + bank_row.icon):
+        os.remove("files/" + bank_row.icon)
+
+    return ResponseModel(result="Success")

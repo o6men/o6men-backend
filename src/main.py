@@ -2,6 +2,7 @@ import asyncio
 import string
 from contextlib import asynccontextmanager
 from datetime import datetime, UTC
+from decimal import Decimal
 from locale import currency
 from random import randint, choice
 
@@ -39,7 +40,6 @@ async def create_test_data():
             symbol="₽",
             rate=94.6,
             min_amount=4000,
-            commission_step=15000
         )
         currency_rows = await CurrencyCore.find_all()
 
@@ -63,7 +63,7 @@ async def create_test_data():
     if len(withdraws) < 60:
         last_dt = datetime.now(UTC)
         for i in range(60):
-            amount = randint(1, 10000) / randint(1, 9)
+            amount = Decimal(randint(1, 10000) / randint(1, 9)).quantize(Decimal('0.01'))
             last_dt = last_dt - timedelta(days=randint(1, 2), hours=randint(0, 8), minutes=randint(0, 88), seconds=randint(0, 654))
             await WithdrawCore.add(
                 user_id=choice(user_rows).id,
@@ -74,7 +74,7 @@ async def create_test_data():
                 currency_id=choice(currency_rows).id,
                 comment=choice(("Тестовый комментарий" + str(i), "")),
                 amount=amount,
-                usdt_amount=amount/99.104,
+                usdt_amount=(amount/Decimal(99.104)).quantize(Decimal('0.01')),
                 tag=choice(("Тестовый тег" + str(i), "")),
                 status=choice(['completed', 'waiting', 'reject', 'correction']),
                 datetime=last_dt,
@@ -86,14 +86,14 @@ async def create_test_data():
     if len(topups) < 68:
         last_dt = datetime.now(UTC)
         for i in range(68):
-            amount = randint(1, 10000) / randint(1, 9)
+            amount = Decimal(randint(1, 10000) / randint(1, 9)).quantize(Decimal('0.01'))
             last_dt = last_dt - timedelta(days=randint(1, 2), hours=randint(0, 8), minutes=randint(0, 88),
                                           seconds=randint(0, 654))
             await TopUpCore.add(
                 user_id=choice(user_rows).id,
                 transaction_hash="".join([choice(string.ascii_letters) for _ in range(64)]),
                 usdt_amount=amount,
-                pre_balance=randint(500, 12423),
+                pre_balance=Decimal(randint(500, 12423)),
                 datetime=last_dt,
             )
 
